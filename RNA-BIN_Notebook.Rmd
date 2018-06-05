@@ -209,7 +209,7 @@ setkey(sampleTable, Label)
 
 The _read.paired.bed()_ function is employed to parse the files containing the paired RNA-DNA reads. For each BED file, the corresponding gene names are assigned to the RNA and DNA fragments (these are already present in the input BED files but they correspond to a very old Gencode genes annotation). Pairs for which it is not possible to assign either of the framents to a unique position on the genome (i.e., BWA mapQ score < 37). Cases where the RNA fragment could not be assigned to an annotated features were marked _intergenic_, while fragments mapping to more than one gene, which could lead to double counting or misassignment, were marked _multigenic_. Note, the latter case should not occur considering that the annotation was designed to avoid such issue.
 
-```{r readInteractions, eval=FALSE}
+```{r readInteractions}
 if( !dir.exists(paste0(working.folder, "processed")) )
    dir.create(paste0(working.folder, "processed"), recursive=TRUE)
 
@@ -299,7 +299,7 @@ if(!exists("fdr.th")) fdr.th = 0.05
 
 The FDR is set to `fdr.th`.
 
-```{r significance, eval=FALSE}
+```{r significance}
 if( !dir.exists(paste0(working.folder, "RData")) )
    dir.create(paste0(working.folder, "RData"), recursive=TRUE)
 
