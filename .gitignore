@@ -1,0 +1,7 @@
+*.Rproj
+*.html
+*.gff3.gz
+*.tsv.gz
+*.rds
+*.RData
+*.sizes
