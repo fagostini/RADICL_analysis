@@ -209,6 +209,8 @@ setkey(sampleTable, Label)
 
 The _read.paired.bed()_ function is employed to parse the files containing the paired RNA-DNA reads. For each BED file, the corresponding gene names are assigned to the RNA and DNA fragments (these are already present in the input BED files but they correspond to a very old Gencode genes annotation). Pairs for which it is not possible to assign either of the framents to a unique position on the genome (i.e., BWA mapQ score < 37). Cases where the RNA fragment could not be assigned to an annotated features were marked _intergenic_, while fragments mapping to more than one gene, which could lead to double counting or misassignment, were marked _multigenic_. Note, the latter case should not occur considering that the annotation was designed to avoid such issue.
 
+_WARNING: This chunk is labour-intensive. If the outputs have already been generated, make sure they are in the correct folder and have the correct name to avoid regenerating them all._
+
 ```{r readInteractions}
 if( !dir.exists(paste0(working.folder, "processed")) )
    dir.create(paste0(working.folder, "processed"), recursive=TRUE)
@@ -299,6 +301,8 @@ if(!exists("fdr.th")) fdr.th = 0.05
 
 The FDR is set to `fdr.th`.
 
+_WARNING: This chunk is labour-intensive. If the outputs have already been generated, make sure they are in the correct folder and have the correct name to avoid regenerating them all._
+
 ```{r significance}
 if( !dir.exists(paste0(working.folder, "RData")) )
    dir.create(paste0(working.folder, "RData"), recursive=TRUE)
@@ -310,12 +314,15 @@ for( grp in unique(paste(sampleTable[, Experiment], sampleTable[, Condition], se
       next
    
    print(grp)
-
+   
    files = list.files(paste0(working.folder, "processed"), pattern=paste0(grp, ".*.gz"), full.names=TRUE)
    files = files[grepl(bin_width, files) & !grepl("GenicOnly", files) & !grepl("significant", files)]
-   interactions = rbindlist(lapply(files,
-                                   function(x)
-                                      fread(paste("gunzip -c", x))))
+   interactions = rbindlist(lapply(seq_along(files),
+                                   function(x){
+                                      tmp = fread(paste("gunzip -c", files[[as.numeric(as.character(x))]]))
+                                      tmp[, replicate := as.numeric(as.character(x))]
+                                      tmp
+                                   }))
    
    
    # Calculate the count per interaction pair
@@ -380,8 +387,10 @@ for( grp in unique(paste(sampleTable[, Experiment], sampleTable[, Condition], se
    
    # Calculate the conditional (and weighted) probability
    # subset[, `:=`(pjh = rj*rh*frandom*Distance)][, `:=`(Distance = NULL, rj = NULL, rh = NULL)]
-   subset[, `:=`(pjh = rj*rh*frandom)][, `:=`(rj = NULL, rh = NULL)]
-   
+   # subset[, `:=`(pjh = rj*rh*frandom)][, `:=`(rj = NULL, rh = NULL)]
+   # subset[, `:=`(pjh = rj*(.N/sum(Count)), N = sum(Count)), by="gene_id.R"]
+   subset[, `:=`(pjh = 1*(1/.N), N = sum(Count)), by="gene_id.R"]
+
    # Perform the binomial test
    setkeyv(subset, c("gene_id.R", "gene_id.D"))
    subset[, `:=`(pval=binom.test(Count, N, p=pjh, alternative="greater")$p.value), by=key(subset)]
@@ -392,12 +401,13 @@ for( grp in unique(paste(sampleTable[, Experiment], sampleTable[, Condition], se
    unique.bins = length(subset[, unique(gene_id.D)])
    
    setkeyv(subset, "gene_id.R")
-   subset[, fdr.tsc := p.adjust(pval, method="BH", n=unique.bins), by=key(subset)]
-   # Perform the correction (Benjamini-Hochberg and Benjamini-Yekutieli) per condition
-   # Calculate the total number of interacting bins (whether with genic or intergenic regions)
-   total.inter = as.numeric(length(subset[, unique(gene_id.R)]))*as.numeric(length(subset[, unique(gene_id.D)]))
-   subset[, fdr.cnd := p.adjust(pval, method="BH", n=total.inter)]
-   
+   subset[, fdr.tsc := p.adjust(pval, method="BH"), by=key(subset)]
+   # # Perform the correction (Benjamini-Hochberg and Benjamini-Yekutieli) per condition
+   # # Calculate the total number of interacting bins (whether with genic or intergenic regions)
+   # total.inter = as.numeric(length(subset[, unique(gene_id.R)]))*as.numeric(length(subset[, unique(gene_id.D)]))
+   # subset[, fdr.cnd := p.adjust(pval, method="BH", n=total.inter)]
+   subset[, fdr.cnd := p.adjust(pval, method="BH")]
+
    # Calculate the observed vs expected ratio
    subset[, `:=`(Rjh = log2(Count/(pjh*N)))]
    
@@ -410,6 +420,8 @@ for( grp in unique(paste(sampleTable[, Experiment], sampleTable[, Condition], se
    
    setkeyv(subset, c("gene_id.R", "gene_id.D"))
    setkeyv(interactions, key(subset))
+
+   # print(nrow(subset[fdr.tsc<fdr.th & Count==1,]), nrow(subset[fdr.cnd<fdr.th & Count==1,]))
    
    output = interactions[subset[fdr.tsc<fdr.th, list(Condition=grp, gene_id.R, gene_id.D, Pvalue=pval, FDR=fdr.tsc)], nomatch=0]
    
@@ -419,10 +431,12 @@ for( grp in unique(paste(sampleTable[, Experiment], sampleTable[, Condition], se
    rm(output); gc()
    
    output = interactions[subset[fdr.cnd<fdr.th, list(Condition=grp, gene_id.R, gene_id.D, Pvalue=pval, FDR=fdr.cnd)], nomatch=0]
-   
+
+   # print(nrow(subset[fdr.tsc<fdr.th & Count==1,]))
+
    writeGzip(output, file=paste0(working.folder, "processed/RNA-BIN_", grp, "_", gencode_version, "_level_1_2_3_Unique_", bin_width, "_significant", fdr.th, "_extended_cnd_noDistance.tsv"),
              col.names=TRUE, showProgress=TRUE, wait=FALSE, level=9)
-   
+
    rm(interactions, subset, output); gc()
    
 }
