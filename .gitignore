@@ -5,3 +5,4 @@
 *.rds
 *.RData
 *.sizes
+*.sqlite
