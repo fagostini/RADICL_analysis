@@ -96,7 +96,7 @@ read.paired.bed <- function(file, min.mapq=reads.quality.min, min.length=reads.l
    column.names = paste(c("chr", "start", "stop", "score", "strand"), rep(c("R", "D"), each=5), sep=".")
    column.types = rep(c("character", "numeric", "numeric", "character", "numeric", "character"), 2)
    if( grepl("*.gz", file) ){
-      bed = fread(paste("gunzip -c", file), select=c(1:3, 5:9, 11:12),
+      bed = fread(cmd=paste("gunzip -c", file), select=c(1:3, 5:9, 11:12),
                   col.names=column.names,
                   colClasses=c(column.types, rep("character", 3)), showProgress=FALSE)
    }else{
@@ -136,6 +136,9 @@ genes.dt = data.table(as.data.frame(genes), index=seq_along(genes), key="index")
 
 tx.regions = readRDS(paste0("GencodeReference/mm10_Gencode", toupper(gencode_version), "_annotations.all.genes.regions.rds"))
 tx.regions.dt = data.table(as.data.frame(tx.regions), index=1:length(tx.regions), key="index")
+
+blacklist = fread(cmd=paste("gunzip -c", file.path(working.folder, "mm10.blacklist.bed.gz")), col.names=c("chr", "start", "end"))
+blacklist.gr = with(blacklist, GRanges(chr, IRanges(start, end)))
 ```
 
 ## Non-annotated stem cell specific transcripts (NASTs) 
@@ -189,18 +192,23 @@ mm10$bin_id = mm10.dt[, bin_id]
 setkey(mm10.dt, index)
 ```
 
-```{r processEnhancer}
+```{r very_old_processEnhancer, eval=FALSE}
 enhancer = fread(paste0(working.folder, "mouse_enhancers.midpoint.mm10.bed"), col.names=c("chr", "start", "end", "name"))
 
-enhancer = with(enhancer, GRanges(chr, IRanges(start, end)))
+enhancer = with(enhancer, GRanges(chr, IRanges(start, end), "*", name))
 
-enhancer = list(flank(enhancer, width=1e3, start=TRUE, both=FALSE),
-                resize(enhancer, width=1e3, fix="start"))
+enhancer.name = enhancer$name
+
+enhancer = list(resize(enhancer, width=1e3, fix="start"),
+                flank(enhancer, width=1e3, start=TRUE, both=FALSE))
 strand(enhancer[[1]]) = "+"
 strand(enhancer[[2]]) = "-"
 
 enhancer[[1]]$name = paste("EnhancerF", seq_along(enhancer[[1]]), sep="_")
 enhancer[[2]]$name = paste("EnhancerR", seq_along(enhancer[[2]]), sep="_")
+
+enhancer[[1]]$old_name = enhancer.name
+enhancer[[2]]$old_name = enhancer.name
 
 enhancer = do.call(c, enhancer)
 
@@ -209,6 +217,207 @@ enhancer = enhancer[!overlapsAny(enhancer, tx.regions),]
 
 # Remove overlapping enhancers
 enhancer = enhancer[-as.data.table(findOverlaps(enhancer))[, .N, queryHits][N>1, queryHits],]
+```
+
+```{r old_processEnhancer, eval=FALSE}
+enhancer = fread(paste0(working.folder, "F5.mm10.enhancers.bed"), select=c(1,4,7), col.names=c("chr", "name", "start"))
+
+enhancer = with(enhancer, GRanges(chr, IRanges(start, width=1), "*", name))
+
+enhancer.name = enhancer$name
+
+# enhancer = list(IRanges::shift(resize(enhancer, width=1e3, fix="start"), 200),
+#                 IRanges::shift(flank(enhancer, width=1e3, start=TRUE, both=FALSE), -200)
+enhancer = list(resize(enhancer, width=1e3, fix="start"),
+                flank(enhancer, width=1e3, start=TRUE, both=FALSE))
+strand(enhancer[[1]]) = "+"
+strand(enhancer[[2]]) = "-"
+
+enhancer[[1]]$name = paste("EnhancerF", seq_along(enhancer[[1]]), sep="_")
+enhancer[[2]]$name = paste("EnhancerR", seq_along(enhancer[[2]]), sep="_")
+
+enhancer[[1]]$old_name = enhancer.name
+enhancer[[2]]$old_name = enhancer.name
+
+enhancer = do.call(c, enhancer)
+
+# Remove enhancers overlapping with annotated genes (or NASTs)
+enhancer = enhancer[!overlapsAny(enhancer, tx.regions),]
+
+# Remove overlapping enhancers
+enhancer = enhancer[-as.data.table(findOverlaps(enhancer))[, .N, queryHits][N>1, queryHits],]
+
+# fwrite(as.data.table(enhancer), file=paste0(working.folder, "Enhancers_divergent_reference.tsv"), sep="\t", row.names=FALSE)
+```
+
+```{r processEnhancer}
+# enhancer = fread(paste0(working.folder, "novel.mESC.enhancers.bed"), select=c(1,4,7), col.names=c("chr", "name", "start"))
+# enhancer = fread(paste0(working.folder, "novel.mOPC.enhancers.bed"), select=c(1,4,7), col.names=c("chr", "name", "start"))
+enhancer = fread(paste0(working.folder, "merge.enhancers.F5.CAGEfightR.bed"), select=c(1,4,7), col.names=c("chr", "name", "start"))
+
+enhancer = with(enhancer, GRanges(chr, IRanges(start, width=1), "*", name))
+
+enhancer.name = enhancer$name
+
+# enhancer = list(IRanges::shift(resize(enhancer, width=1e3, fix="start"), 200),
+#                 IRanges::shift(flank(enhancer, width=1e3, start=TRUE, both=FALSE), -200)
+enhancer = list(resize(enhancer, width=1e3, fix="start"),
+                flank(enhancer, width=1e3, start=TRUE, both=FALSE))
+strand(enhancer[[1]]) = "+"
+strand(enhancer[[2]]) = "-"
+
+enhancer[[1]]$name = paste("EnhancerF", seq_along(enhancer[[1]]), sep="_")
+enhancer[[2]]$name = paste("EnhancerR", seq_along(enhancer[[2]]), sep="_")
+
+enhancer[[1]]$old_name = enhancer.name
+enhancer[[2]]$old_name = enhancer.name
+
+enhancer = do.call(c, enhancer)
+
+# Remove enhancers overlapping with annotated genes (or NASTs)
+enhancer = enhancer[!overlapsAny(enhancer, tx.regions),]
+
+# Remove overlapping enhancers
+enhancer = enhancer[-as.data.table(findOverlaps(enhancer))[, .N, queryHits][N>1, queryHits],]
+```
+
+### Enzymatic treatment
+
+```{r processEnzymatic, eval=FALSE}
+files = list.files(file.path(working.folder, "Enzymatic"), full.names=TRUE, pattern="*.bed.gz$")
+files = setNames(files, tstrsplit(files, "\\.|_|/")[[8]])
+
+interactions = list()
+for( i in seq_along(files) ){
+
+      bed = read.paired.bed(files[i], min.mapq=reads.quality.min, min.length=reads.length.min)
+      
+      # RNA
+      overlaps.rna = as.data.table(findOverlaps(bed[[1]], tx.regions, ignore.strand=FALSE))
+      setkey(overlaps.rna, subjectHits)
+      overlaps.rna = overlaps.rna[tx.regions.dt[, list(index, gene_id.R=gene_id, annotation.R=annotation, gene_type.R=gene_type, region.R=type)], nomatch=0][, subjectHits := NULL]
+      setkey(overlaps.rna, queryHits)
+      # Multigenic
+      overlaps.rna[queryHits%in%overlaps.rna[, .N, by="queryHits"][N>1, queryHits], `:=`(gene_id.R="Multigenic", annotation.R="Multigenic", gene_type.R="Multigenic", region.R="Multigenic")]
+      overlaps.rna = unique(overlaps.rna)
+      # Intergenic
+      missing.rna = data.table(queryHits=setdiff(1:length(bed[[1]]), overlaps.rna[, queryHits]))
+      sel = overlapsAny(bed[[1]][missing.rna[, queryHits],], tx.regions)
+      missing.rna[sel,  `:=`(gene_id.R="Genic_unassigned", annotation.R="Genic_unassigned", gene_type.R="Genic_unassigned", region.R="Genic_unassigned")]
+      missing.rna[!sel, `:=`(gene_id.R="Intergenic", annotation.R="Intergenic", gene_type.R="Intergenic", region.R="Intergenic")]
+      
+      overlaps.rna = rbindlist(list(overlaps.rna, missing.rna))
+      setkey(overlaps.rna, queryHits)
+      
+      # DNA
+      overlaps.dna = data.table(as.data.frame(findOverlaps(bed[[2]], mm10, ignore.strand=TRUE)), key="subjectHits")
+      overlaps.dna = overlaps.dna[mm10.dt[, list(index, gene_id.D=bin_id)], nomatch=0][, subjectHits := NULL]
+      setkey(overlaps.dna, queryHits)
+      # Multigenic
+      overlaps.dna[queryHits%in%overlaps.dna[, .N, by="queryHits"][N>1, queryHits], gene_id.D := "Multigenic"]
+      overlaps.dna = unique(overlaps.dna)
+      # Intergenic
+      missing.dna = data.table(queryHits=setdiff(1:length(bed[[2]]), overlaps.dna[, queryHits]))
+      sel = overlapsAny(bed[[2]][missing.dna[, queryHits],], mm10)
+      missing.dna[, gene_id.D := ifelse(sel, "Bin_unassigned", "Intergenic")]
+      
+      bed = lapply(bed, function(x) data.table(as.data.frame(x), key="index"))
+      
+      overlaps.rna = overlaps.rna[bed[[1]][, list(index, chr.R=seqnames, start.R=start, end.R=end, strand.R=strand)], nomatch=0]
+      setcolorder(overlaps.rna, c(1, 6:9,  2:5))
+      overlaps.dna = overlaps.dna[bed[[2]][, list(index, chr.D=seqnames, start.D=start, end.D=end)], nomatch=0]
+      setcolorder(overlaps.dna, c(1, 3:5,  2))
+      
+      rm(bed); gc()
+      
+      overlaps = overlaps.rna[overlaps.dna, nomatch=0][, queryHits := NULL]
+      overlaps[, region.R := droplevels(region.R)]
+      
+      rm(overlaps.rna, overlaps.dna); gc()
+      
+      interactions = append(interactions, list(overlaps))
+      
+      rm(overlaps)
+      gc()
+   
+}
+
+names(interactions) = names(files)
+
+# Concatenate the list
+interactions = rbindlist(interactions, idcol="name")
+
+saveRDS(interactions,
+        file.path(working.folder, paste0("RData/Enzymatic_overlaps_", gencode_version, "_level_1_2_3_AllOverlapsUnique.rds")))
+```
+
+```{r statsEnzymatic, eval=FALSE}
+interactions = readRDS(file.path(working.folder, paste0("RData/Enzymatic_overlaps_", gencode_version, "_level_1_2_3_AllOverlapsUnique.rds")))
+
+sel.R = !overlapsAny(with(interactions, GRanges(chr.R, IRanges(start.R, end.R))), blacklist.gr)
+sel.D = !overlapsAny(with(interactions, GRanges(chr.D, IRanges(start.D, end.D))), blacklist.gr)
+
+interactions = interactions[sel.R & sel.D,]
+
+interactions[, distance := abs(start.R-end.D)]
+
+subset = interactions[distance<=1e3, .N, by=c("name", "distance")]
+subset = rbindlist(list(subset, with(subset, expand.grid(name=unique(name), distance=0:1e3, N=0))))
+subset = subset[, list(N=sum(N)), by=c("name", "distance")]
+subset = subset[order(distance)]
+subset[, cs := cumsum(N)/sum(N), by="name"]
+subset[name%in%"NoEnzyme", name := "None"][name%in%"RNaseH", name := "H"][, name := factor(name, levels=c("None", "S1", "V1", "H"))]
+
+gg = ggplot(subset[distance>0], aes(x=distance, y=cs, colour=name)) +
+   geom_line() +
+   scale_x_continuous("RNA and DNA tags distance (bp)") +
+   scale_y_continuous("Cumulative distribution function (CDF)", limits=c(0,1)) +
+   scale_colour_brewer("RNAse treatment", palette="Set1") +
+   theme_light() + theme(legend.position=c(0.75, 0.25), legend.box.background = element_rect())
+save_plot(gg, filename=paste0(working.folder, "plots/RNA-BIN_", bin_width, "_enzymatic_distance_between_tags_1kb.pdf"), base_height=4, base_aspect_ratio=1.1)
+
+binDistance = as.character(cut(interactions[, distance], breaks=c(-1, 1e3, 1e4, 1e6, Inf), labels=c("<1Kb", "1-10Kb", "10Kb-1Mb", ">1Mb")))
+binDistance[interactions[, chr.R!=chr.D]] = "Interchromosomal" 
+interactions[, distance := factor(binDistance, levels=c(c("<1Kb", "1-10Kb", "10Kb-1Mb", ">1Mb", "Interchromosomal")))]
+
+dt = interactions[, .N, by=c("name", "distance")][, list(distance, N, P=N/sum(N)), by="name"][order(distance)]
+dt[name%in%"NoEnzyme", name := "None"][name%in%"RNaseH", name := "H"][, name := factor(name, levels=c("None", "S1", "V1", "H"))]
+
+gg = ggplot(dt, aes(x=distance, y=P, fill=name)) +
+   geom_bar(stat="identity", position="dodge", col="black") +
+   scale_fill_brewer("RNAse treatment", palette="Set1") +
+   scale_x_discrete("Distance between RNA and DNA tags") +
+   scale_y_continuous("Dataset fraction", limits=c(0,1), labels=scales::percent) +
+   theme_bw() + theme(legend.position=c(0.1, 0.85), legend.box.background = element_rect())
+save_plot(gg, filename=paste0(working.folder, "plots/RNA-BIN_", bin_width, "_enzymatic_distance_between_tags.pdf"), base_height=6, base_aspect_ratio=1.5)
+
+prom = promoters(genes, upstream=1000, downstream=1000)
+prom = prom[prom$gene_type%in%"protein_coding",]
+
+subset = interactions[gene_id.R%in%prom$gene_id,]
+subset = subset[overlapsAny(with(subset, GRanges(chr.D, IRanges(start.D, width=1), strand="*")), prom),]
+
+overlaps = as.data.table(findOverlaps(with(subset, GRanges(chr.D, IRanges(start.D, width=1), strand="*")), prom))
+subset[, gene_id.D := prom[overlaps[!duplicated(queryHits), subjectHits],]$gene_id]
+
+subset = subset[as.character(gene_id.R)==gene_id.D]
+subset[, distance := abs(start.R-start.D)]
+subset[, bin := findInterval(distance, c(seq(0, 5, 1)*1e3, Inf), all.inside=TRUE)]
+
+subset = subset[, list(Count = .N), by=c("name", "bin")]
+subset[, Percentage := Count/sum(Count), by=c("name")]
+
+subset[name%in%"NoEnzyme", name := "None"][name%in%"RNaseH", name := "H"][, name := factor(name, levels=c("None", "S1", "V1", "H"))]
+
+gg = ggplot(subset, aes(x=as.numeric(bin), y=Percentage, fill=name)) +
+   ggtitle("Protein-coding RNA interactions with their promoter region (+/- 1Kb from TSS)") +
+   geom_bar(stat="identity", position="dodge", colour="black") +
+   scale_x_continuous("RNA and DNA tags distance (binned)",
+                      breaks=1:6, labels=c("< 1Kb", "1-2Kb", "2-3Kb", "3-4Kb", "4-5Kb", "5Kb-gene end")) +
+   scale_y_continuous("Averaga fraction of RNA tags") +
+   scale_fill_brewer("RNAse treatment", palette="Set1") +
+   theme_light()
+save_plot(gg, filename=paste0(working.folder, "plots/RNA-BIN_", bin_width, "_enzymatic_distance_RNAs_and_promoters.pdf"), base_height=6, base_aspect_ratio=1.5)
 ```
 
 ## RADICL-seq analyses (RNA and genomic bins)
@@ -315,6 +524,717 @@ for( lbl in unique(sampleTable[, Label]) ){
              file=paste0(working.folder, "processed/RNA-BIN_", lbl, "_", gencode_version, "_level_1_2_3_Unique_", bin_width, "_GenicOnly.tsv"),
              col.names=TRUE, showProgress=TRUE, wait=TRUE, level=9)
 }
+```
+
+```{r DNAcoverageFunction}
+read.paired.bed.2 <- function(file, min.mapq=reads.quality.min, min.length=reads.length.min){
+   column.names = paste(c("chr", "start", "stop", "score", "strand"), rep(c("R", "D"), each=5), sep=".")
+   column.types = rep(c("character", "numeric", "numeric", "character", "numeric", "character"), 2)
+   if( grepl("*.gz", file) ){
+      bed = fread(cmd=paste("gunzip -c", file), select=c(1:3, 5:9, 11:12),
+                  col.names=column.names,
+                  colClasses=c(column.types, rep("character", 3)), showProgress=TRUE)
+   }else{
+      bed = fread(file, select=c(1:3, 5:9, 11:12),
+                  col.names=column.names,
+                  colClasses=c(column.types, rep("character", 3)), showProgress=TRUE)
+   }
+   
+   bed = bed[score.R>=min.mapq & score.D>=min.mapq]
+   bed = bed[(stop.R-start.R+1)<min.length & (stop.D-start.D+1)<min.length]
+   return(bed)   
+}
+```
+
+```{r subsampledMappedCoverage, eval=FALSE}
+sample.names = setNames(unique(sampleTable[, Label]), unique(sampleTable[, Label]))
+
+# Iterate through the groups
+tab = rbindlist(lapply(sample.names,
+                       function(lbl){
+                          
+                          print(lbl)
+                          # Iterate through the individual files for the group
+                          interactions = lapply(sampleTable[Label%in%lbl, Path],
+                                                function(pth)
+                                                   read.paired.bed.2(pth))
+                          interactions = rbindlist(interactions)
+                          interactions = interactions[chr.R%in%paste0("chr", c(1:19, "X", "Y")) & chr.D%in%paste0("chr", c(1:19, "X", "Y"))]
+                          tmp.gr = with(interactions, GRanges(chr.R, IRanges(start.R, stop.R)))
+                          interactions = interactions[!overlapsAny(tmp.gr, blacklist.gr),]
+                          tmp.gr = with(interactions, GRanges(chr.D, IRanges(start.D, stop.D)))
+                          interactions = interactions[!overlapsAny(tmp.gr, blacklist.gr),]
+                          rm(tmp.gr)
+                          dt = data.table(readsN=numeric(), covDNA=numeric())
+                          for( i in seq(1e6, nrow(interactions), 1e6) ){
+                             subset = interactions[sample(1:nrow(interactions), i),]
+                             dt = rbind(dt, data.table(readsN=subset[, .N],
+                                                       # uniRNA=subset[grepl("ENSMUS", gene_id.R), length(unique(gene_id.R))],
+                                                       # uniInt=subset[, .N, by=c("gene_id.R", "gene_id.D")][, .N],
+                                                       covDNA=with(subset, sum(sum(coverage(reduce(GRanges(chr.D, IRanges(start.D, stop.D)))))))))
+                             rm(subset)
+                          }
+                          dt = rbind(dt,
+                                     data.table(readsN=interactions[, .N],
+                                                # uniRNA=interactions[grepl("ENSMUS", gene_id.R), length(unique(gene_id.R))],
+                                                # uniInt=interactions[, .N, by=c("gene_id.R", "gene_id.D")][, .N],
+                                                covDNA=with(interactions, sum(sum(coverage(reduce(GRanges(chr.D, IRanges(start.D, stop.D)))))))))
+                          rm(interactions)
+                       }), idcol="Set")
+
+sameStats = stats[, list(sameLoc = .SD[gene_id.R==gene_id.D, sum(N)], diffLoc = .SD[gene_id.R!=gene_id.D, sum(N)]), by=c("Set")]
+
+sameStats[, `:=`(samePerc = sameLoc/(sameLoc+diffLoc), diffPerc = diffLoc/(sameLoc+diffLoc))]
+
+fwrite(sameStats, file=paste0(working.folder, "Interactions_same_locus_stats.tsv"), append=FALSE, quote=FALSE, sep="\t")
+```
+
+```{r cutsiteAluI, eval=FALSE}
+require("Biostrings")
+dnaseq = DNAString("AGCT")
+
+AluI.gr = vmatchPattern(dnaseq, Mmusculus, exclude = c("M", "_"))
+
+dt = data.table(as.data.frame(distanceToNearest(AluI.gr)))
+
+dt = dt[, .N, by="distance"][order(distance)]
+
+fwrite(dt, file=paste(working.folder, "Distance_between_AluI_cutsites.tsv"), quote=FALSE, row.names=FALSE, sep="\t")
+
+tab = setNames(unique(sampleTable[, Label]), unique(sampleTable[, Label]))
+
+# Iterate through the groups
+tab = rbindlist(lapply(tab[grepl("GRID", tab)|(grepl("1FA", tab))],
+                       function(lbl){
+                          
+                          print(lbl)
+                          # Iterate through the individual files for the group
+                          bed = lapply(sampleTable[Label%in%lbl, Path],
+                                       function(pth)
+                                          read.paired.bed.2(pth))
+                          bed = rbindlist(bed)
+                          
+                          bed = with(bed[chr.D%in%paste0("chr", c(1:19, "X", "Y")),], GRanges(chr.D, IRanges(start.D, stop.D)))
+                          
+                          bed = bed[!overlapsAny(bed, blacklist.gr),]
+                          
+                          dt = data.table(as.data.frame(distanceToNearest(bed, AluI.gr)))
+                          
+                          dt = dt[, .N, by="distance"][order(distance)]
+                          
+                          return(dt)
+                          
+                       }), idcol="Sample")
+
+fwrite(tab, file=paste(working.folder, "DNA_reads_distance_to_AluI_cutsites.tsv"), quote=FALSE, row.names=FALSE, sep="\t")
+```
+
+```{r plotCutsiteAluI, eval=FALSE}
+Alu = fread(paste(working.folder, "Distance_between_AluI_cutsites.tsv"))
+Alu[, C := cumsum(N)/sum(N)]
+
+tab = fread(paste(working.folder, "DNA_reads_distance_to_AluI_cutsites.tsv"))
+tab[, `:=`(P = N/sum(N), C = cumsum(N)/sum(N)), by="Sample"]
+
+tab[, c("Technique", "Cell", "Condition", "Replicate") := tstrsplit(Sample, "_")]
+tab = tab[, list(C = mean(C)), by=c("Technique", "Cell", "distance")]
+
+gg1 = ggplot(tab, aes(x=distance, y=C, col=paste(Technique, Cell))) +
+   ggtitle("DNA tag distance to nearest AluI restriction site") +
+   geom_line() +
+   scale_x_continuous("Distance to nearest AluI restriction site (bp)") +
+   scale_y_continuous("Percentage of DNA reads", breaks=pretty, labels=percent, limits=c(0,1)) +
+   scale_colour_tableau("", palette = "Tableau 10") +
+   facet_zoom(x=distance<1e3) +
+   theme_light() + theme(legend.position="bottom")
+
+gg2 = ggplot(Alu, aes(x=distance+1, y = ..density.., weight = N)) +
+   ggtitle("Distance between AluI restriction sites") +
+   geom_histogram(bins=25, col="black", fill="grey") +
+   scale_x_log10("Distance to nearest AluI restriction sites (bp)") + scale_y_continuous("Density") + theme_bw()
+
+tab2 = fread(paste(working.folder, "DNA_reads_genome_coverage_subsample_5e6.tsv"))
+tab2 = tab2[grepl("GRID", Sample)|(grepl("1FA", Sample))]
+tab2[, c("Technique", "Cell", "Condition", "Replicate") := tstrsplit(Sample, "_")]
+tab2 = tab2[, list(mean(nrow_post/nrow_pre)), by=c("Technique", "Cell")]
+
+gg3 = ggplot(tab2, aes(x=paste(Technique, Cell, sep="\n"), y=V1, fill=paste(Technique, Cell))) +
+   ggtitle("Unique DNA positions recovered from a sub-sample of 5M tags") +
+   geom_bar(stat="identity", position="identity", colour="black") +
+   scale_y_continuous("Percentage of the sub-sample", labels=percent, limits=c(0,1)) +
+   scale_x_discrete("") +
+   scale_fill_tableau("", palette = "Tableau 10") +
+   theme_light() + guides(fill=FALSE)
+
+gg = ggarrange(gg1, ggarrange(gg2, gg3, nrow=2), ncol=2)
+ggsave(gg, filename=paste0(working.folder, "plots/AluI_bias_and_DNA_tags.png"), width=12, height=8, dpi=300, family="Helvetica")
+ggsave(gg, filename=paste0(working.folder, "plots/AluI_bias_and_DNA_tags.pdf"), width=12, height=8, dpi=300, family="Helvetica")
+```
+
+```{r less1Kb_analysis, eval=FALSE}
+# Iterate through the groups
+tab = rbindlist(lapply(setNames(unique(sampleTable[, Label]), unique(sampleTable[, Label]))[c(1:5)],
+                       function(lbl){
+                          
+                          print(lbl)
+                          # Iterate through the individual files for the group
+                          bed = lapply(sampleTable[Label%in%lbl, Path],
+                                       function(pth)
+                                          read.paired.bed.2(pth))
+                          bed = rbindlist(bed)
+                          
+                          bed[, `:=`(Total = .N, Intra = nrow(.SD[chr.R==chr.D]))]
+                          bed = bed[chr.R==chr.D]
+                          
+                          bed[, list(perfectMatch = nrow(.SD[start.R==start.D & stop.R==stop.D]),
+                                     sameStart    = nrow(.SD[start.R==start.D & !stop.R==stop.D]),
+                                     sameEnd      = nrow(.SD[!start.R==start.D & stop.R==stop.D]),
+                                     anyOverlaps  = nrow(.SD[(start.R<start.D & stop.R>start.D) | (start.R<stop.D & stop.R>stop.D) | (start.D<start.R & stop.D>stop.R)]),
+                                     less1kb      = nrow(.SD[(((start.D-stop.R) <= 1e3) & ((start.D-stop.R) > 0)) | (((start.R-stop.D) < 1e3) & ((start.R-stop.D) > 0))]),
+                                     Intra=unique(Intra), Total=unique(Total))]
+                       }), idcol="Sample")
+fwrite(tab, file=paste(working.folder, "RNA-DNA_reads_less1Kb_stats.tsv"), quote=FALSE, row.names=FALSE, sep="\t")
+```
+
+```{r runDNAcoverage, eval=FALSE}
+# Iterate through the groups
+tab = rbindlist(lapply(setNames(unique(sampleTable[, Label]), unique(sampleTable[, Label]))[c(1:5)],
+                       function(lbl){
+                          
+                          print(lbl)
+                          # Iterate through the individual files for the group
+                          bed = lapply(sampleTable[Label%in%lbl, Path],
+                                       function(pth)
+                                          read.paired.bed.2(pth))
+                          bed = rbindlist(bed)
+                          
+                          bed = with(bed[sample(.N, 1e7)], GRanges(chr.D, IRanges(start.D, stop.D)))
+                          
+                          data.table(nrow_pre = length(bed), nrow_post = length(reduce(bed)),
+                                     expected=sum(width(bed)), coverage=sum(width(reduce(bed))))
+                       }), idcol="Sample")
+
+geno = seqinfo(BSgenome.Mmusculus.UCSC.mm10)
+geno.size = sum(seqlengths(geno)[seqnames(geno)%in%paste0("chr", c(1:19, "X", "Y"))])
+
+tab[, `:=`(General=NULL, post.pre=nrow_post/nrow_pre*100, obs.exp=coverage/expected*100, cov.geno=coverage/geno.size*100)]
+
+fwrite(tab, file=paste(working.folder, "DNA_reads_genome_coverage_subsample_1e7.tsv"), quote=FALSE, row.names=FALSE, sep="\t")
+
+# Iterate through the groups
+tab = rbindlist(lapply(setNames(unique(sampleTable[, Label]), unique(sampleTable[, Label])),
+                       function(lbl){
+                          
+                          print(lbl)
+                          # Iterate through the individual files for the group
+                          bed = lapply(sampleTable[Label%in%lbl, Path],
+                                       function(pth)
+                                          read.paired.bed.2(pth))
+                          bed = rbindlist(bed)
+                          
+                          bed = with(bed[sample(.N, 5e6)], GRanges(chr.D, IRanges(start.D, stop.D)))
+                          
+                          data.table(nrow_pre = length(bed), nrow_post = length(reduce(bed)), coverage=sum(width(reduce(bed))))
+                       }), idcol="Sample")
+
+geno = seqinfo(BSgenome.Mmusculus.UCSC.mm10)
+geno.size = sum(seqlengths(geno)[seqnames(geno)%in%paste0("chr", c(1:19, "X", "Y"))])
+
+tab[, `:=`(General=NULL, post.pre=nrow_post/nrow_pre*100, cov.geno=coverage/geno.size*100)]
+
+fwrite(tab, file=paste(working.folder, "DNA_reads_genome_coverage_subsample_5e6.tsv"), quote=FALSE, row.names=FALSE, sep="\t")
+```
+
+```{r plotDNAcoverage}
+tab = fread(paste(working.folder, "DNA_reads_genome_coverage_subsample_1e7.tsv"))
+tab[, c("Technique", "Cell", "Condition", "Replicate") := tstrsplit(gsub("4h_ActD", "4h-ActD", Sample), "_")]
+tab[, Sample := gsub("_[123]$", "", Sample)]
+tab1 = rbindlist(list(tab[, list(Sample, Replicate, cov.geno)], with(tab, expand.grid(Sample=unique(Sample), Replicate=1:3, cov.geno=NA))))
+tab2 = rbindlist(list(tab[, list(Sample, Replicate, obs.exp)], with(tab, expand.grid(Sample=unique(Sample), Replicate=1:3, obs.exp=NA))))
+
+gg1 = ggplot(tab1, aes(x=Sample, y=cov.geno/100, fill=Replicate)) +
+   geom_bar(stat="identity", position="dodge", colour="black") +
+   scale_fill_manual(values=rev(c("#74a9cf", "#2b8cbe", "#045a8d"))) +
+   scale_x_discrete("") +
+   scale_y_continuous("DNA tags genomic Coverage", labels=percent) +
+   theme_light() + theme(axis.text.x=element_text(angle=45, hjust=1))
+gg2 = ggplot(tab2, aes(x=Sample, y=obs.exp/100, fill=Replicate)) +
+   geom_bar(stat="identity", position="dodge", colour="black") +
+   scale_fill_manual(values=rev(c("#74a9cf", "#2b8cbe", "#045a8d"))) +
+   scale_x_discrete("") +
+   scale_y_continuous("DNA tags coverage (Observed/Expected)", labels=percent) +
+   theme_light() + theme(axis.text.x=element_text(angle=45, hjust=1))
+gg = ggarrange(gg1, gg2, ncol=2, common.legend=TRUE, legend="bottom")
+ggsave(gg, filename=paste0(working.folder, "plots/Genomic_coverage_DNA_tags_subsampled.png"), width=12, height=6, dpi=300, family="Helvetica")
+ggsave(gg, filename=paste0(working.folder, "plots/Genomic_coverage_DNA_tags_subsampled.pdf"), width=12, height=6, family="Helvetica")
+
+tab = fread(paste(working.folder, "DNA_reads_genome_coverage_subsample_5e6.tsv"))
+tab[, c("Technique", "Cell", "Condition", "Replicate") := tstrsplit(gsub("4h_ActD", "4h-ActD", Sample), "_")]
+tab[, Sample := gsub("_[123]$", "", Sample)]
+tab = rbindlist(list(tab[, list(Sample, Replicate, cov.geno)], with(tab, expand.grid(Sample=unique(Sample), Replicate=1:3, cov.geno=NA))))
+
+gg = ggplot(tab, aes(x=Sample, y=cov.geno/100, fill=Replicate)) +
+   geom_bar(stat="identity", position="dodge", colour="black") +
+   scale_fill_manual(values=rev(c("#74a9cf", "#2b8cbe", "#045a8d"))) +
+   scale_x_discrete("") +
+   scale_y_continuous("DNA tags genomic Coverage", labels=percent) +
+   theme_light() + theme(axis.text.x=element_text(angle=45, hjust=1))
+ggsave(gg, filename=paste0(working.folder, "plots/Genomic_coverage_DNA_tags_subsampled.png"), width=8, height=6, dpi=300, family="Helvetica")
+ggsave(gg, filename=paste0(working.folder, "plots/Genomic_coverage_DNA_tags_subsampled.pdf"), width=8, height=6, family="Helvetica")
+```
+
+```{r distanceToAluI, eval=FALSE}
+dnaseq <- DNAString("AGCT")
+AluI = vmatchPattern(dnaseq, BSgenome.Mmusculus.UCSC.mm10)
+
+grp = "GRID_mESC_GRIDseq"
+print(grp)
+
+
+read.paired.bed.2 <- function(file, min.mapq=reads.quality.min, min.length=reads.length.min){
+   column.names = paste(c("chr", "start", "stop", "score", "strand"), rep(c("R", "D"), each=5), sep=".")
+   column.types = rep(c("character", "numeric", "numeric", "character", "numeric", "character"), 2)
+   if( grepl("*.gz", file) ){
+      bed = fread(cmd=paste("gunzip -c", file), select=c(1:3, 5:9, 11:12),
+                  col.names=column.names,
+                  colClasses=c(column.types, rep("character", 3)), showProgress=TRUE)
+   }else{
+      bed = fread(file, select=c(1:3, 5:9, 11:12),
+                  col.names=column.names,
+                  colClasses=c(column.types, rep("character", 3)), showProgress=TRUE)
+   }
+   
+   bed = bed[score.R>=min.mapq & score.D>=min.mapq]
+   bed = bed[(stop.R-start.R+1)<min.length & (stop.D-start.D+1)<min.length]
+   return(bed)   
+}
+
+
+files.gseq = list.files(paste0(working.folder, "processed"), pattern=paste0(grp, ".*.gz"), full.names=TRUE)
+files.gseq = files.gseq[grepl(bin_width, files.gseq) & !grepl("GenicOnly", files.gseq) & !grepl("significant", files.gseq)]
+gseq = lapply(seq_along(files.gseq),
+                        function(x){
+                           tmp = fread(cmd=paste("gunzip -c",
+                                                 files.gseq[[as.numeric(as.character(x))]]),
+                                       showProgress=FALSE)
+                           tmp[, replicate := as.numeric(as.character(x))]
+                           tmp = tmp[chr.D%in%paste0("chr", c(1:19, "X", "Y")),]
+                           tmp.gr = with(tmp, GRanges(chr.D, IRanges(start.D, end.D)))
+                           tmp.gr = tmp.gr[!overlapsAny(tmp.gr, blacklist.gr),]
+                           tmp.gr
+                        })
+gseq.dist = lapply(gseq, function(x) as.data.table(distanceToNearest(x, AluI)))
+
+saveRDS(gseq.dist, file=paste0(working.folder, "RData/GRIDseq_distance_to_nearest_AluI.rds"))
+
+gseq.bin = lapply(gseq.dist,
+                  function(x){
+                     x[, bin := findInterval(distance, c(-Inf, 0, 1, 5, 10, 20, 100, Inf), all.inside=FALSE, left.open=TRUE)-1]
+                     x[, .N, by="bin"]
+                  })
+names(gseq.bin) = paste("Replicate", 1:2, sep="_")
+
+gseq.bin = rbindlist(gseq.bin, idcol="Replicate")
+gseq.bin[, P := N/sum(N), by="Replicate"]
+
+ggplot(gseq.bin, aes(x=as.factor(bin), y=P, fill=Replicate)) +
+   geom_bar(position="dodge", stat="identity", colour="black") +
+   scale_x_discrete("Distance to nearest AluI site", breaks=0:6, labels=c("0", "1", "1-5", "5-10", "10-20", "20-100", "100+")) +
+   scale_y_continuous("Dataset fraction", breaks=seq(0,1,0.1), labels=percent) +
+   scale_fill_brewer() + theme_light() + theme(legend.position=c(0.8, 0.8))
+```
+
+```{r sameLocusInteractions, eval=FALSE}
+sample.names = unique(sampleTable[, paste(Experiment, Condition, sep="_")])
+sample.names = setNames(sample.names, sample.names)
+stats = rbindlist(lapply(sample.names,
+                         function(grp){
+                            
+                            print(grp)
+                            
+                            files = list.files(paste0(working.folder, "processed"), pattern=paste0(grp, ".*.gz"), full.names=TRUE)
+                            files = files[grepl(bin_width, files) & grepl("GenicOnly", files) & !grepl("significant", files)]
+                            interactions = rbindlist(lapply(seq_along(files),
+                                                            function(x){
+                                                               tmp = fread(cmd=paste("gunzip -c", files[[as.numeric(as.character(x))]]), showProgress=FALSE)
+                                                               tmp[, replicate := as.numeric(as.character(x))]
+                                                               tmp = tmp[chr.D%in%paste0("chr", c(1:19, "X", "Y")),]
+                                                               tmp.gr = with(tmp, GRanges(chr.D, IRanges(start.D, end.D)))
+                                                               tmp = tmp[!overlapsAny(tmp.gr, blacklist.gr),]
+                                                               tmp.gr = tmp.gr[!overlapsAny(tmp.gr, blacklist.gr),]
+                                                               overlaps = as.data.table(findOverlaps(tmp.gr, tx.regions))
+                                                               overlaps = overlaps[!duplicated(queryHits),]
+                                                               sel1 = overlaps[, queryHits]
+                                                               sel2 = overlaps[, subjectHits]
+                                                               tmp = tmp[sel1, gene_id.D := tx.regions[sel2,]$gene_id]
+                                                               tmp[, list(N = .N), by=c("annotation.R", "gene_id.R", "gene_id.D")]
+                                                            }))
+                            interactions
+                         }), idcol="Set")
+
+sameStats = stats[, list(sameLoc = .SD[gene_id.R==gene_id.D, sum(N)], diffLoc = .SD[gene_id.R!=gene_id.D, sum(N)]), by=c("Set")]
+
+sameStats[, `:=`(samePerc = sameLoc/(sameLoc+diffLoc), diffPerc = diffLoc/(sameLoc+diffLoc))]
+
+fwrite(sameStats, file=paste0(working.folder, "Interactions_same_locus_stats.tsv"), append=FALSE, quote=FALSE, sep="\t")
+```
+
+```{r normalisedExpression, eval=FALSE}
+sample.names = c("GRID_mESC_GRIDseq", "RADICL_mESC_1FA", "RADICL_mOPC_1FA")
+
+stats = rbindlist(lapply(setNames(sample.names, sample.names),
+                         function(grp){
+                            
+                            print(grp)
+                            
+                            files = list.files(paste0(working.folder, "processed"), pattern=paste0(grp, ".*.gz"), full.names=TRUE)
+                            files = files[grepl(bin_width, files) & !grepl("GenicOnly", files) & !grepl("significant", files)]
+                            interactions = rbindlist(lapply(seq_along(files),
+                                                            function(x){
+                                                               tmp = fread(cmd=paste("gunzip -c", files[[as.numeric(as.character(x))]]), showProgress=FALSE)
+                                                               tmp[, replicate := as.numeric(as.character(x))]
+                                                               tmp = tmp[chr.D%in%paste0("chr", c(1:19, "X", "Y")),]
+                                                               tmp.gr = with(tmp, GRanges(chr.D, IRanges(start.D, end.D)))
+                                                               tmp = tmp[!overlapsAny(tmp.gr, blacklist.gr),]
+                                                               tmp
+                                                            }))
+                            interactions[, .N, by="gene_id.R"]
+                         }), idcol="Set")
+tab = dcast.data.table(stats[, list(gene_id.R, N=N/sum(N)*1e6), by="Set"][grep("ENSMUS", gene_id.R),], gene_id.R~Set, value.var="N", fill=0)
+fwrite(tab, file=paste0(working.folder, "RNA_genes_normalised_counts.tsv"), append=FALSE, quote=FALSE, sep="\t")
+```
+
+```{r TagsAnnotation, eval=FALSE}
+sample.names = unique(paste(sampleTable[, Experiment], sampleTable[, Condition], sep="_"))
+stats = rbindlist(lapply(setNames(sample.names, sample.names),
+       function(grp){
+   
+   print(grp)
+   
+   files = list.files(paste0(working.folder, "processed"), pattern=paste0(grp, ".*.gz"), full.names=TRUE)
+   files = files[grepl(bin_width, files) & !grepl("GenicOnly", files) & !grepl("significant", files)]
+   interactions = rbindlist(lapply(seq_along(files),
+                                   function(x){
+                                      tmp = fread(paste("gunzip -c", files[[as.numeric(as.character(x))]]), showProgress=FALSE)
+                                      tmp[, replicate := as.numeric(as.character(x))]
+                                      tmp
+                                   }))
+   interactions[, index := seq_along(chr.D)]
+   setkey(interactions, index)
+   
+   overlaps = as.data.table(findOverlaps(with(interactions, GRanges(chr.D, IRanges(start.D, end.D))), tx.regions))
+   overlaps[, N := .N, by="queryHits"]
+   setkey(overlaps, subjectHits)
+   overlaps[tx.regions.dt, `:=`(gene_type.D = gene_type, annotation.D = annotation, region.D = type)]
+   overlaps[N>1, `:=`(gene_type.D = "Multiple overlaps", annotation.D = "Multiple overlaps", region.D = "Multiple overlaps")]
+   setkey(overlaps, queryHits)
+   overlaps = overlaps[!duplicated(queryHits),]
+   
+   interactions[overlaps, `:=`(gene_type.D = gene_type.D, annotation.D = annotation.D, region.D = region.D)]
+   tab = list(DNA=interactions[, .N, by=c("annotation.D", "gene_type.D", "region.D")],
+              RNA=interactions[, .N, by=c("annotation.R", "gene_type.R", "region.R")])
+   setnames(tab[[1]], c("Annotation", "Type", "Region", "N"))      
+   setnames(tab[[2]], c("Annotation", "Type", "Region", "N"))      
+   tab = rbindlist(tab, idcol="Tag")
+                   
+   tab[is.na(Annotation), `:=`(Annotation = "Intergenic", Type = "Intergenic", Region = "Intergenic")]
+   
+   tab[order(Tag, Annotation, Type, Region)]
+    
+}), idcol="Sample")
+
+saveRDS(stats, file=paste0(working.folder, "RData/RNA-BIN_Tags_annotation.rds"))
+```
+
+```{r plotTagsAnnotation}
+tab = readRDS(paste0(working.folder, "RData/RNA-BIN_Tags_annotation.rds"))
+
+tab[Annotation%in%"Multiple overlaps", Annotation := "Multigenic"][Annotation%in%"other", Annotation := "other annotated"]
+tab[Annotation%in%"long_ncRNA", Annotation := paste(Annotation, Region, sep="_")]
+tab[Region%in%"CDS", Region := "exon"][Region%in%"five_prime_UTR", Region := "UTR5"][Region%in%"three_prime_UTR", Region := "UTR3"]
+tab[Annotation%in%"protein_coding", Annotation := paste(Annotation, Region, sep="_")]
+
+tab[, General := "Genic"]
+tab[Annotation%in%"Intergenic", General := "Intergenic"]
+
+tab = list(tab[, list(N=sum(N)), by=c("Sample", "Tag", "General")], tab[, list(N=sum(N)), by=c("Sample", "Tag", "Annotation")])
+setnames(tab[[1]], names(tab[[2]]))
+tab = rbindlist(tab, idcol="Group")
+
+tab = tab[, Annotation := factor(Annotation, levels=c("Genic", "protein_coding_UTR5", "protein_coding_exon", "protein_coding_intron", "protein_coding_UTR3", "long_ncRNA_exon", "long_ncRNA_intron", "ncRNA", "NAST", "other annotated", "Multigenic", "Intergenic"))]
+tab = tab[, list(N=sum(N)), by=c("Sample", "Tag", "Group", "Annotation")]
+tab = tab[, list(Annotation, Value=N/sum(N)), by=c("Sample", "Tag", "Group")][order(Annotation), list(Annotation, Value, Percentage=round(Value*100, 1), Position = cumsum(Value) - 0.5*Value), by=c("Tag", "Group", "Sample")]
+tab[, Tag := factor(Tag, levels=c("RNA", "DNA"))]
+
+gg = ggplot(tab, aes(x=as.factor(Group), y=Value, fill=Annotation)) +
+   geom_bar(position="stack", stat="identity", colour="black", width=0.6) +
+   scale_fill_tableau(palette="Classic Cyclic") +
+   coord_polar(theta="y", direction=-1) +
+   facet_wrap(Tag~Sample, ncol=7) +
+   theme_minimal() +
+   geom_text(aes(x = Group+0.5, y = 1-Position, label = paste0(Percentage, "%")), col="black", size = 2) +
+   theme(axis.text = element_blank(), axis.ticks = element_blank(), panel.grid  = element_blank(),
+         axis.text.y = element_blank(), axis.text.x = element_blank(), axis.title=element_blank(),
+         panel.background = element_blank(), strip.background = element_blank(), strip.text.x = element_text(size = 14),
+         strip.text.y = element_text(size = 14), legend.title=element_text(size = 14), legend.text=element_text(size = 14))
+ggsave(gg, filename=paste0(working.folder, "plots/Figure2AB.png"), width=24, height=10, dpi=300, family="Helvetica")
+ggsave(gg, filename=paste0(working.folder, "plots/Figure2AB.pdf"), width=24, height=10, family="Helvetica")
+```
+
+```{r DNAtagsDensity, eval=FALSE}
+stats = lapply(unique(paste(sampleTable[, Experiment], sampleTable[, Condition], sep="_")),
+       function(grp){
+   
+   print(grp)
+   
+   files = list.files(paste0(working.folder, "processed"), pattern=paste0(grp, ".*.gz"), full.names=TRUE)
+   files = files[grepl(bin_width, files) & !grepl("GenicOnly", files) & !grepl("significant", files)]
+   interactions = rbindlist(lapply(seq_along(files),
+                                   function(x){
+                                      tmp = fread(paste("gunzip -c", files[[as.numeric(as.character(x))]]), showProgress=FALSE)
+                                      tmp[, replicate := as.numeric(as.character(x))]
+                                      tmp
+                                   }))
+   
+   # Calculate the count per interaction pair
+   setkeyv(interactions, c("chr.D", "start.D", "end.D", "gene_id.D", "replicate"))
+   interactions = interactions[, .N, by=key(interactions)]
+
+   interactions = interactions[, .N, by=c("replicate", "gene_id.D")]
+   interactions[, list(Sample=grp, Median=as.numeric(median(N)), Mean=as.numeric(mean(N))), by="replicate"]
+})
+
+stats = rbindlist(stats)[, c(2,1,3,4)]
+fwrite(stats, file=paste0(working.folder, "RNA-BIN_DNA_tags_density.tsv"), append=FALSE, quote=FALSE, sep="\t")
+```
+
+```{r interactionDistanceBins, eval=FALSE}
+interactions = rbindlist(lapply(setNames(c("GRID_mESC_GRIDseq", "RADICL_mESC_1FA", "RADICL_mESC_4h_ActD"),
+                                         c("GRID_mESC_GRIDseq", "RADICL_mESC_1FA", "RADICL_mESC_4h_ActD")),
+                                function(grp){
+                                   
+                                   files = list.files(paste0(working.folder, "processed"), pattern=paste0(grp, ".*.gz"), full.names=TRUE)
+                                   files = files[grepl(bin_width, files) & !grepl("GenicOnly", files) & !grepl("significant", files)]
+                                   tmp = rbindlist(lapply(seq_along(files),
+                                                          function(x){
+                                                             tmp = fread(cmd=paste("gunzip -c", files[[as.numeric(as.character(x))]]))
+                                                             tmp[, replicate := as.numeric(as.character(x))]
+                                                             tmp
+                                                          }))
+                                   return(tmp)
+                                }), idcol="Condition")
+
+setkeyv(interactions, c("Condition", "chr.R", "start.R", "chr.D", "start.D", "gene_id.R"))
+interactions = interactions[, .N, by=key(interactions)]
+setnames(interactions, "N", "Count")
+
+sel.R = !overlapsAny(with(interactions, GRanges(chr.R, IRanges(start.R, width=1))), blacklist.gr)
+sel.D = !overlapsAny(with(interactions, GRanges(chr.D, IRanges(start.D, width=1))), blacklist.gr)
+
+interactions = interactions[sel.R & sel.D,]
+
+interactions[, Condition := gsub("4h_ActD", "4h-ActD", Condition)]
+
+subset = interactions[gene_id.R!="Intergenic", list(Total = log10(sum(Count)+1),
+                                                    Count = log10(.SD[chr.R!=chr.D, sum(Count)]+1),
+                                                    Number = log10(.SD[chr.R!=chr.D, .N]+1)), by=c("Condition", "gene_id.R")]
+gg = ggpairs(subset, columns=3:5, aes(colour=Condition), columnLabels=c("RNA expression", "Inter- (counts)", "Inter- (pairs)"))
+save_plot(gg + theme_light(), filename=paste0(working.folder, "plots/RNA-BIN_interchromosomal_expression_counts_pairs.png"), base_height=4, base_aspect_ratio=1.1, family="Helvetica", ncol=3, nrow=3)
+
+prom = promoters(genes, upstream=1000, downstream=1000)
+prom = prom[prom$gene_type%in%"protein_coding",]
+
+subset = interactions[gene_id.R%in%prom$gene_id,]
+subset = subset[overlapsAny(with(subset, GRanges(chr.D, IRanges(start.D, width=1), strand="*")), prom),]
+
+overlaps = as.data.table(findOverlaps(with(subset, GRanges(chr.D, IRanges(start.D, width=1), strand="*")), prom))
+subset[, gene_id.D := prom[overlaps[!duplicated(queryHits), subjectHits],]$gene_id]
+
+subset = subset[gene_id.R==gene_id.D]
+subset[, distance := abs(start.R-start.D)]
+subset[, bin := findInterval(distance, c(seq(0, 5, 1)*1e3, Inf), all.inside=TRUE)]
+
+subset = subset[, list(Count = sum(Count)), by=c("Condition", "gene_id.R", "bin")]
+subset[, Percentage := Count/sum(Count), by=c("Condition", "gene_id.R")]
+
+data = subset[, list(Percentage = mean(Percentage)), by=c("Condition", "bin")]
+gg = ggplot(data, aes(x=as.numeric(bin), y=Percentage, fill=Condition)) +
+   ggtitle("Protein-coding RNA interactions with their promoter region (+/- 1Kb from TSS)") +
+   geom_bar(stat="identity", position="dodge", colour="black") +
+   scale_x_continuous("RNA and DNA tags distance (binned)",
+                      breaks=1:6, labels=c("< 1Kb", "1-2Kb", "2-3Kb", "3-4Kb", "4-5Kb", "5Kb-gene end")) +
+   scale_y_continuous("Averaga fraction of RNA tags") +
+   scale_fill_tableau(palette = "Tableau 10") +
+   theme_light()
+
+
+# subset = interactions[chr.R==chr.D & abs(start.R-start.D)<=1e3,]
+# subset[, distance := abs(start.R-start.D)]
+# setkeyv(subset, c("Condition", "distance"))
+# subset = subset[, list(Count = sum(Count)), by=key(subset)]
+# subset = rbindlist(list(with(subset, expand.grid(Condition = unique(Condition), distance=0, Count=0)), subset))
+# subset[, binStep := findInterval(distance, seq(0, 1e3, length.out=1000), all.inside=TRUE)]
+# subset = subset[, list(Count = sum(Count)), by=c("Condition", "binStep")]
+# subset[, CS := cumsum(Count), by=c("Condition")][, P := CS/max(CS), by=c("Condition")]
+# gg = ggplot(subset, aes(x=binStep, y=P, colour=Condition)) +
+#    geom_line() +
+#    scale_x_continuous("Distance between RNA and DNA tags") +
+#    scale_y_continuous("CDF") +
+#    scale_colour_tableau(palette="Tableau 10") +
+#    theme_light() + theme(legend.position=c(0.8, 0.2))
+
+interactions[chr.R!=chr.D, Label := "Inter"]
+interactions[is.na(Label) & abs(start.R-start.D)<1e3, Label := "<1Kb"]
+interactions[is.na(Label) & abs(start.R-start.D)<1e4, Label := "1-10Kb"]
+interactions[is.na(Label) & abs(start.R-start.D)<1e5, Label := "10-100Kb"]
+interactions[is.na(Label) & abs(start.R-start.D)<1e6, Label := "100Kb-1Mb"]
+interactions[is.na(Label) & abs(start.R-start.D)>=1e6, Label := ">=1Mb"]
+
+tab = interactions[, list(Count = sum(Count)), by=c("Condition", "Label")]
+tab[, Label := factor(Label, levels=c("<1Kb", "1-10Kb", "10-100Kb", "100Kb-1Mb", ">=1Mb", "Inter"))]
+tab[, Percentage := Count/sum(Count), by="Condition"]
+
+gg = ggplot(tab, aes(x=Label, y=Percentage, fill=Condition)) +
+   geom_bar(stat="identity", position="dodge", col="black") +
+   scale_x_discrete("Distance between RNA and DNA tags") +
+   scale_y_continuous("Dataset fraction", breaks=pretty, labels=percent) +
+   scale_fill_tableau() +
+   theme_light() + theme(legend.position=c(0.15, 0.9)) + guides(fill=guide_legend(title=element_blank()))
+ggsave(gg, filename=paste0(working.folder, "plots/RNA-BIN_interactionDistance_condition.png"), width=10, height=6, dpi=300, family="Helvetica")
+ggsave(gg, filename=paste0(working.folder, "plots/RNA-BIN_interactionDistance_condition.pdf"), width=10, height=6, family="Helvetica")
+```
+
+```{r, eval=FALSE}
+sample.names = unique(sampleTable[, paste(Experiment, Condition, sep="_")])
+sample.names = setNames(sample.names, sample.names)
+
+gene = "ENSMUSG00000088088.1"
+
+interactions = lapply(sample.names,
+                      function(grp){
+                         
+                         print(grp)
+                         
+                         files.int = list.files(paste0(working.folder, "processed"), pattern=paste0(grp, ".*.gz"), full.names=TRUE)
+                         files.int = files.int[grepl(bin_width, files.int) & !grepl("GenicOnly", files.int) & !grepl("significant", files.int)]
+                         inter = rbindlist(lapply(seq_along(files.int),
+                                        function(x){
+                                           tmp = fread(cmd=paste("gunzip -c",
+                                                                 files.int[[as.numeric(as.character(x))]]),
+                                                       showProgress=FALSE)
+                                           tmp[, replicate := as.numeric(as.character(x))]
+                                           tmp = tmp[gene_id.R==gene]
+                                           tmp = tmp[chr.D%in%paste0("chr", c(1:19, "X", "Y")),]
+                                           tmp.gr = with(tmp, GRanges(chr.D, IRanges(start.D, end.D)))
+                                           tmp = tmp[!overlapsAny(tmp.gr, blacklist.gr),]
+                                           tmp
+                                        }))
+                      })
+interactions = rbindlist(interactions, idcol="Condition")
+
+subset = interactions[, list(Count = .N), by=c("Condition", "gene_id.R", "gene_id.D")]
+
+# files.sig = list.files(paste0(working.folder, "processed"), pattern="*_cnd_*", full.names=TRUE)
+# 
+# significant = rbindlist(lapply(files.sig,
+#                                function(x)
+#                                   fread(cmd=paste("gunzip -c", x), showProgress=FALSE)))
+# setnames(significant, "replicate", "Replicate")
+# 
+# subset = significant[Condition%in%"RADICL_mESC_1FA", list(gene_id.R, chr.R, start.R, start.R, gene_id.D, chr.D, start.D, end.D)]
+# 
+# subset = significant[!grepl("chrM", gene_id.D), list(Count=.N), by=c("Condition", "gene_id.R", "gene_id.D")]
+
+rna_ids = copy(genes)
+rna_ids = keepSeqlevels(rna_ids, paste0("chr", c(1:19, "X", "Y")), pruning.mode="coarse")
+rna_ids = data.table(as.data.frame(rna_ids), key="gene_id")
+
+dna_ids = copy(mm10)
+dna_ids = keepSeqlevels(dna_ids, paste0("chr", c(1:19, "X", "Y")), pruning.mode="coarse")
+dna_ids = data.table(as.data.frame(dna_ids), key="bin_id")
+
+gene_name = genes.dt[gene_id%in%gene, gene_name]
+gene_chr = as.character(genes.dt[gene_id%in%gene, seqnames])
+
+message(gene_name)
+
+breaks = seq(0, ceiling(log2(max(subset[, Count]))), 1)
+col_fun = colorRamp2(breaks, viridis(length(breaks)))
+lgd_links = Legend(at = seq(0, max(round(range(breaks))), 2),
+                   col_fun = col_fun, type="grid", title_position = "topcenter", title = "log2(Count)", direction = "horizontal")
+lgd_list_vertical = packLegend(lgd_links)
+
+myset = subset[gene_id.R%in%gene,]
+
+myset = split(myset, myset$Condition)
+
+bed1 = lapply(myset,
+              function(x)
+                 cbind(rna_ids[match(x[, gene_id.R], rna_ids[, gene_id]),], rou1=0.8))
+for( i in seq_along(bed1) )
+   setkey(bed1[[i]], gene_type)
+
+bed2 = lapply(myset,
+              function(x)
+                 cbind(dna_ids[match(x[, gene_id.D], dna_ids[, bin_id]),], rou2=0.9))
+
+bed2 = lapply(seq_along(bed2),
+              function(x)
+                 bed2[[as.numeric(as.character(x))]][, `:=`(value = log2(myset[[as.numeric(as.character(x))]][, Count]),
+                                                            colour = col_fun(log2(myset[[as.numeric(as.character(x))]][, Count])))])
+
+cytoband = read.cytoband(species="mm10")
+cytoband_df = cytoband$df
+chromosome = cytoband$chromosome
+
+xrange = c(cytoband$chr.len, cytoband$chr.len[gene_chr])
+normal_chr_index = 1:length(chromosome)
+zoomed_chr_index = length(chromosome)+1
+
+# normalize in normal chromsomes and zoomed chromosomes separately
+sector.width = c(xrange[normal_chr_index] / sum(xrange[normal_chr_index]),
+                 xrange[zoomed_chr_index] / sum(xrange[zoomed_chr_index]))
+
+extend_chromosomes = function(bed, chromosome, prefix = "zoom_") {
+   if( chromosome %in% as.data.frame(bed)[, 1] ){
+      zoom_bed = bed[bed[[1]] %in% chromosome, , drop = FALSE]
+      zoom_bed[[1]] = paste0(prefix, zoom_bed[[1]])
+      return(rbind(bed, zoom_bed))
+   }else{
+      return(bed)
+   }
+}   
+
+pdf(paste0(working.folder, "plots/circos_BIN_", gene_name, "_Lines.pdf"), width=18, height=10)
+# png(paste0(working.folder, "plots/circos_BIN_", gene_name, "_Lines.png"), units="in", width=18, height=10, res=72)
+vec = if( length(bed1)%%2==0 ){ c(1:length(bed1)) }else{ c(1:length(bed1), 0) }
+layout(matrix(vec, 2, length(vec)/2))
+for( i in seq_along(bed1) ){
+   circos.clear()
+   circos.par(start.degree = 90)
+   circos.initializeWithIdeogram(extend_chromosomes(cytoband_df, gene_chr), sector.width = sector.width)
+   if( diff(range(bed2[[i]][, value]))!=0 ){
+      circos.genomicTrack(extend_chromosomes(bed2[[i]][, list(seqnames, start, end, value)], gene_chr),
+                          panel.fun = function(region, value, ...) {
+                             circos.genomicLines(region, value, type = "h")
+                          })         
+      circos.link(gene_chr, get.cell.meta.data("cell.xlim", sector.index = gene_chr),
+                  paste0("zoom_", gene_chr), get.cell.meta.data("cell.xlim", sector.index = paste0("zoom_", gene_chr)),
+                  col = "#00000020", border = NA)
+      bed2[[i]][seqnames%in%gene_chr, seqnames := paste0("zoom_", seqnames)]
+      circos.genomicLink(bed1[[i]], bed2[[i]], col=bed2[[i]]$colour)
+      # circos.genomicLabels(extend_chromosomes(bed1[[i]][1,], gene_chr), side = "inside", labels=gene_name, connection_height = convert_height(3, "mm"))
+   }
+   text(0, 1.2, names(bed1)[i], cex=2, font=2)
+   title(names(bed1)[i])
+   circos.clear()
+}
+pushViewport(viewport(x = unit(2, "mm"), y = unit(6, "mm"),
+                      width = grobWidth(lgd_list_vertical)*2,
+                      height = grobHeight(lgd_list_vertical),
+                      just = c("left", "bottom")))
+grid.draw(lgd_list_vertical)
+dev.off()
 ```
 
 ```{r setFDR, echo=FALSE}
@@ -471,6 +1391,386 @@ for( grp in unique(paste(sampleTable[, Experiment], sampleTable[, Condition], se
 #              col.names=TRUE, showProgress=TRUE, wait=TRUE, level=9)
 ```
 
+```{r normalisedExpressionSign, eval=FALSE}
+files.sig = list.files(paste0(working.folder, "processed"), pattern="*_cnd_*", full.names=TRUE)
+
+significant = rbindlist(lapply(files.sig,
+                               function(x)
+                                  fread(cmd=paste("gunzip -c", x), showProgress=FALSE)))
+setnames(significant, "replicate", "Replicate")
+
+significant = significant[chr.D%in%paste0("chr", c(1:19, "X", "Y")),]
+significant.gr = with(significant, GRanges(chr.D, IRanges(start.D, end.D)))
+significant = significant[!overlapsAny(significant.gr, blacklist.gr),]
+
+significant = significant[, .N, by=c("Condition", "gene_id.R")]
+significant = significant[grep("ENSMUS", gene_id.R),]
+significant = significant[Condition%in%c("GRID_mESC_GRIDseq", "RADICL_mESC_1FA", "RADICL_mOPC_1FA"),]
+
+tab = dcast.data.table(significant[, list(gene_id.R, N=N/sum(N)*1e6), by="Condition"], gene_id.R~Condition, value.var="N", fill=0)
+fwrite(tab, file=paste0(working.folder, "RNA_genes_normalised_significant_counts.tsv"), append=FALSE, quote=FALSE, sep="\t")
+```
+
+```{r counts_and_bins, eval=FALSE}
+files.sig = list.files(paste0(working.folder, "processed"), pattern="*_cnd_*", full.names=TRUE)
+
+significant = rbindlist(lapply(files.sig,
+                               function(x)
+                                  fread(paste("gunzip -c", x), showProgress=FALSE)))
+setnames(significant, "replicate", "Replicate")
+
+counts = significant[region.R%in%"CDS", region.R := "exon"][region.R%in%c("exon", "intron"), list(Bins=length(unique(gene_id.D)), Counts=.N), by=c("Condition", "gene_id.R", "region.R")]
+
+ggl = lapply(counts[, unique(Condition)],
+             function(x)
+                ggplot(counts[Condition%in%as.character(x),], aes(x=Counts, y=Bins, col=region.R)) +
+                ggtitle(as.character(x)) +
+                geom_point(size=0.5, alpha=0.5) +
+                scale_y_log10("Number of bound bins") + scale_x_log10("Counts") +
+                scale_colour_brewer("Gene feature", palette="Set1") +
+                theme_light() + theme(legend.position=c(0.2, 0.8))
+             )
+
+png(file=paste0(working.folder, "RNA-BIN_Bins_vs_Counts.png"), units="in", width=16, height=16, res=72, family="Helvetica")
+ggarrange(plotlist=ggl, ncol=3, nrow=3)
+dev.off()
+```
+
+```{r plotTagsAnnotationSig, eval=FALSE}
+files.sig = list.files(paste0(working.folder, "processed"), pattern="*_cnd_*", full.names=TRUE)
+
+significant = rbindlist(lapply(files.sig,
+                               function(x)
+                                  fread(paste("gunzip -c", x), showProgress=FALSE)))
+setnames(significant, "replicate", "Replicate")
+
+tab = significant[, list(Count = .N), by=c("Condition", "annotation.R", "region.R")]
+setnames(tab, "annotation.R", "Annotation")
+setnames(tab, "region.R", "Region")
+
+tab[Annotation%in%"other", Annotation := "other annotated"]
+tab[Annotation%in%"long_ncRNA", Annotation := paste(Annotation, Region, sep="_")]
+tab[Region%in%"CDS", Region := "exon"][Region%in%"five_prime_UTR", Region := "UTR5"][Region%in%"three_prime_UTR", Region := "UTR3"]
+tab[Annotation%in%"protein_coding", Annotation := paste(Annotation, Region, sep="_")]
+
+tab[, Annotation := factor(Annotation, levels=c("protein_coding_UTR5", "protein_coding_exon", "protein_coding_intron", "protein_coding_UTR3", "long_ncRNA_exon", "long_ncRNA_intron", "ncRNA", "NAST", "other annotated"))]
+tab = tab[, list(Count=sum(Count)), by=c("Condition", "Annotation")]
+tab = tab[, list(Annotation, Value=Count/sum(Count)), by="Condition"][order(Annotation),]
+tab = tab[,list(Annotation, Value, Percentage=round(Value*100, 1), Position = cumsum(Value) - 0.5*Value), by="Condition"]
+
+gg = ggplot(tab, aes(x=as.factor(1), y=Value, fill=Annotation)) +
+   geom_bar(position="stack", stat="identity", colour="black", width=0.6) +
+   scale_fill_tableau(palette="Classic Cyclic") +
+   coord_polar(theta="y", direction=-1) +
+   facet_wrap(~Condition, ncol=4) +
+   theme_minimal() +
+   geom_text(aes(x = 1+0.5, y = 1-Position, label = paste0(Percentage, "%")), col="black", size = 2) +
+   theme(axis.text = element_blank(), axis.ticks = element_blank(), panel.grid  = element_blank(),
+         axis.text.y = element_blank(), axis.text.x = element_blank(), axis.title=element_blank(),
+         panel.background = element_blank(), strip.background = element_blank(), strip.text.x = element_text(size = 14),
+         strip.text.y = element_text(size = 14), legend.title=element_text(size = 14), legend.text=element_text(size = 14))
+ggsave(gg, filename=paste0(working.folder, "plots/FigureS2A.png"), width=16, height=8, dpi=300, family="Helvetica")
+ggsave(gg, filename=paste0(working.folder, "plots/FigureS2A.pdf"), width=16, height=8, family="Helvetica")
+```
+
+```{r interactionDistanceBins, eval=FALSE}
+files.sig = list.files(paste0(working.folder, "processed"), pattern="*_cnd_*", full.names=TRUE)
+
+significant = rbindlist(lapply(files.sig,
+                               function(x)
+                                  fread(cmd=paste("gunzip -c", x), showProgress=FALSE)))
+setnames(significant, "replicate", "Replicate")
+
+setkeyv(significant, c("Condition", "chr.R", "start.R", "chr.D", "start.D", "gene_id.R"))
+significant = significant[, .N, by=key(significant)]
+setnames(significant, "N", "Count")
+
+sel.R = !overlapsAny(with(significant, GRanges(chr.R, IRanges(start.R, width=1))), blacklist.gr)
+sel.D = !overlapsAny(with(significant, GRanges(chr.D, IRanges(start.D, width=1))), blacklist.gr)
+
+significant = significant[sel.R & sel.D,]
+
+significant[, Condition := gsub("4h_ActD", "4h-ActD", Condition)]
+
+subset = significant[gene_id.R!="Intergenic", list(Total = log10(sum(Count)+1),
+                                                    Count = log10(.SD[chr.R!=chr.D, sum(Count)]+1),
+                                                    Number = log10(.SD[chr.R!=chr.D, .N]+1)), by=c("Condition", "gene_id.R")]
+gg = ggpairs(subset, columns=3:5, aes(colour=Condition), columnLabels=c("RNA expression", "Inter- (counts)", "Inter- (pairs)"))
+save_plot(gg + theme_light(), filename=paste0(working.folder, "plots/RNA-BIN_interchromosomal_expression_counts_pairs_significant.png"), base_height=4, base_aspect_ratio=1.1, family="Helvetica", ncol=3, nrow=3)
+```
+
+```{r enhancedRegions, eval=FALSE}
+# mESC
+files.mOPC = list.files(file.path(working.folder, "mOPC_CAGE_mm10"), full.names=TRUE)
+
+cage.mOPC = lapply(files.mOPC, function(x) with(fread(x, showProgress=FALSE), GRanges(V1, IRanges(V2, width=1), V6, score=V5)))
+
+cage.mOPC = sapply(cage.mOPC, function(x) countOverlapsWeighted(mm10, x, ignore.strand=TRUE))
+
+cage.mOPC = data.table(as.data.frame(mm10), CAGE=rowMeans(t(t(cage.mOPC)/colSums(cage.mOPC)*1e6)))
+
+fwrite(cage.mOPC, file=file.path(working.folder, "mOPC_CAGE_mm10_binned_count.tsv"), sep="\t", row.names=FALSE, quote=FALSE)
+
+files.sig = list.files(paste0(working.folder, "processed"), pattern="*_cnd_*", full.names=TRUE)
+
+significant = fread(cmd=paste("gunzip -c", file.path(working.folder, "processed", "RNA-BIN_RADICL_mOPC_1FA_m14_level_1_2_3_Unique_25KB_significant0.05_extended_cnd_noDistance.tsv.gz")),
+                    showProgress=FALSE)
+setnames(significant, "replicate", "Replicate")
+significant = dcast.data.table(significant[, .N, by=c("gene_id.R", "gene_id.D", "Replicate")], gene_id.R+gene_id.D~Replicate, value.var="N")
+significant = significant[rowSums(significant[, 3:5, with=FALSE]>1)==3,]
+significant[, Count := `1`+`2`+`3`]
+
+# cage.mOPC = cage.mOPC[cage.mOPC$CAGE>0,]
+
+res.mOPC = significant[, list(p.val=wilcox.test(cage.mOPC[bin_id%in%.SD[, gene_id.D], CAGE], cage.mOPC[, CAGE])$p.value), by=c("gene_id.R")]
+
+res.mOPC[, p.adj := p.adjust(p.val, method="BH")]
+
+fwrite(res.mOPC, file=file.path(working.folder, "mOPC_CAGE_RADICL_results.tsv"), sep="\t", row.names=FALSE, quote=FALSE)
+
+res.mOPC = significant[, list(p.val=wilcox.test(cage.mOPC[bin_id%in%.SD[, gene_id.D], CAGE], cage.mOPC[, CAGE], alternative="less")$p.value), by=c("gene_id.R")]
+
+res.mOPC[, p.adj := p.adjust(p.val, method="BH")]
+
+fwrite(res.mOPC, file=file.path(working.folder, "mOPC_CAGE_RADICL_results_lowerTail.tsv"), sep="\t", row.names=FALSE, quote=FALSE)
+
+# mESC
+files.mESC = list.files(file.path(working.folder, "mESC_CAGE_mm10"), full.names=TRUE)
+
+cage.mESC = lapply(files.mESC, function(x) with(fread(x), GRanges(V1, IRanges(V2, width=1), V6, score=V5)))
+
+cage.mESC = sapply(cage.mESC, function(x) countOverlapsWeighted(mm10, x, ignore.strand=TRUE))
+
+cage.mESC = data.table(as.data.frame(mm10), CAGE=rowMeans(t(t(cage.mESC)/colSums(cage.mESC)*1e6)))
+
+fwrite(cage.mESC, file=file.path(working.folder, "mESC_CAGE_mm10_binned_count.tsv"), sep="\t", row.names=FALSE, quote=FALSE)
+
+significant = fread(cmd=paste("gunzip -c", file.path(working.folder, "processed", "RNA-BIN_RADICL_mESC_1FA_m14_level_1_2_3_Unique_25KB_significant0.05_extended_cnd_noDistance.tsv.gz")),
+                    showProgress=FALSE)
+setnames(significant, "replicate", "Replicate")
+significant = dcast.data.table(significant[, .N, by=c("gene_id.R", "gene_id.D", "Replicate")], gene_id.R+gene_id.D~Replicate, value.var="N")
+significant = significant[rowSums(significant[, 3:5, with=FALSE]>1)==3,]
+significant[, Count := `1`+`2`+`3`]
+
+# cage.mESC = cage.mESC[cage.mESC$CAGE>0,]
+
+res.mESC = significant[, list(p.val=wilcox.test(cage.mESC[bin_id%in%.SD[, gene_id.D], CAGE], cage.mESC[, CAGE])$p.value), by=c("gene_id.R")]
+
+res.mESC[, p.adj := p.adjust(p.val, method="BH")]
+
+fwrite(res.mESC, file=file.path(working.folder, "mESC_CAGE_RADICL_results.tsv"), sep="\t", row.names=FALSE, quote=FALSE)
+
+res.mESC = significant[, list(p.val=wilcox.test(cage.mESC[bin_id%in%.SD[, gene_id.D], CAGE], cage.mESC[, CAGE], alternative="less")$p.value), by=c("gene_id.R")]
+
+res.mESC[, p.adj := p.adjust(p.val, method="BH")]
+
+fwrite(res.mESC, file=file.path(working.folder, "mESC_CAGE_RADICL_results_lowerTail.tsv"), sep="\t", row.names=FALSE, quote=FALSE)
+```
+
+```{r, eval=FALSE}
+significant = significant[, .N, by=c("Condition", "chr.R", "start.R", "gene_id.R", "chr.D", "start.D")]
+setkeyv(significant, c("Condition", "gene_id.R"))
+
+tab = significant[, list(N=sum(N)), by=key(significant)]
+tab[, quartile := findInterval(N, quantile(N, seq(0, 1, 0.25)), all.inside=TRUE), by="Condition"]
+
+significant[tab, quartile := quartile]
+
+significant[chr.R!=chr.D, Label := "Inter"]
+significant[is.na(Label) & abs(start.R-start.D)<1e3, Label := "<1Kb"]
+significant[is.na(Label) & abs(start.R-start.D)<1e4, Label := "1-10Kb"]
+significant[is.na(Label) & abs(start.R-start.D)<1e5, Label := "10-100Kb"]
+significant[is.na(Label) & abs(start.R-start.D)<1e6, Label := "100Kb-1Mb"]
+significant[is.na(Label) & abs(start.R-start.D)>=1e6, Label := ">=1Mb"]
+
+tab = significant[, list(N=sum(N)), by=c("Condition", "quartile", "Label", "gene_id.R")]
+tab[, Label := factor(Label, levels=c("<1Kb", "1-10Kb", "10-100Kb", "100Kb-1Mb", ">=1Mb", "Inter"))]
+
+gg = ggplot(tab, aes(x=Label, y=log2(N), fill=as.factor(quartile))) +
+   ggtitle("Expression quartiles were calculated individually per condition") +
+   geom_boxplot(outlier.size=0.5) +
+   scale_x_discrete("Distance between RNA and DNA tags") +
+   scale_y_continuous("Interactions count (log2)") +
+   scale_fill_viridis(option="inferno", begin=0.2, end=0.8, discrete=TRUE) +
+   facet_wrap(~Condition, ncol=7) +
+   theme_light() + theme(legend.position="bottom") + guides(fill=guide_legend(title="Expression quartile"))
+ggsave(gg, filename=paste0(working.folder, "plots/RNA-BIN_interactionDistance_significantQuartiles.png"), width=28, height=5, dpi=300, family="Helvetica")
+ggsave(gg, filename=paste0(working.folder, "plots/RNA-BIN_interactionDistance_significantQuartiles.pdf"), width=28, height=5, family="Helvetica")
+```
+
+```{r stats_Biotypes, eval=FALSE}
+raw = list()
+sig = list()
+for( grp in unique(paste(sampleTable[, Experiment], sampleTable[, Condition], sep="_")) ){
+   
+   print(grp)
+   
+   files = list.files(paste0(working.folder, "processed"), pattern=paste0(grp, ".*.gz"), full.names=TRUE)
+   files = files[grepl(bin_width, files) & grepl("GenicOnly", files) & !grepl("significant", files)]
+   raw[[grp]] = rbindlist(lapply(seq_along(files),
+                                   function(x){
+                                      tmp = fread(paste("gunzip -c", files[[as.numeric(as.character(x))]]), showProgress=FALSE)
+                                      tmp[, replicate := as.numeric(as.character(x))]
+                                      tmp[, .N, by=c("replicate", "gene_id.R", "annotation.R", "gene_type.R")]
+                                   }))
+
+   files.sig = list.files(paste0(working.folder, "processed"), pattern="*_cnd_*", full.names=TRUE)
+   files.sig = files.sig[grepl(grp, files.sig)]
+   tmp = fread(paste("gunzip -c", files.sig), showProgress=FALSE)
+   sig[[grp]] = tmp[, .N, by=c("replicate", "gene_id.R", "annotation.R", "gene_type.R")]
+   rm(tmp); gc()
+}
+
+raw = rbindlist(raw, idcol="sample")
+sig = rbindlist(sig, idcol="sample")
+
+tab = rbindlist(list(raw=raw, sig=sig), idcol="set")
+
+tab.rep = tab[, .N, by=c("set", "sample", "replicate", "annotation.R")]
+tab.rep = rbindlist(list(tab.rep,
+                         with(tab.rep, expand.grid(set=unique(set), sample=unique(sample), replicate=1:3,
+                                                   annotation.R=unique(annotation.R), N=NA))))
+tab.rep[, annotation.R := factor(annotation.R, levels=c("protein_coding", "long_ncRNA", "ncRNA", "other", "NAST"))]
+
+gg = ggplot(tab.rep, aes(x = annotation.R, y = N, fill = as.factor(replicate))) +
+   geom_bar(position="dodge", stat="identity", col="black") +
+   scale_y_continuous("Count") + scale_x_discrete("") +
+   scale_fill_manual(values=rev(c("#74a9cf", "#2b8cbe", "#045a8d"))) +
+   facet_grid(set~sample, scales="free_y") +
+   theme_light() + theme(axis.text.x=element_text(angle=45, hjust=1)) + guides(fill=guide_legend(title="Replicate"))
+ggsave(gg, filename=paste0(working.folder, "plots/RNA-BIN_RNAbiotypes_unique_replicate.png"), width=14, height=6, dpi=300, family="Helvetica")
+ggsave(gg, filename=paste0(working.folder, "plots/RNA-BIN_RNAbiotypes_unique_replicate.pdf"), width=14, height=6, family="Helvetica")
+
+tab.cnd = tab[, list(N=length(unique(gene_id.R))), by=c("set", "sample", "annotation.R")]
+tab.cnd = rbindlist(list(tab.cnd,
+                         with(tab.cnd, expand.grid(set=unique(set), sample=unique(sample),
+                                                   annotation.R=unique(annotation.R), N=NA))))
+tab.cnd[, annotation.R := factor(annotation.R, levels=c("protein_coding", "long_ncRNA", "ncRNA", "other", "NAST"))]
+
+gg = ggplot(tab.cnd, aes(x = annotation.R, y = N, fill = set)) +
+   geom_bar(position="dodge", stat="identity", col="black") +
+   scale_y_continuous("Count") + scale_x_discrete("") +
+   scale_fill_tableau(palette="Classic Blue-Red 6") +
+   facet_grid(~sample, scales="free_y") +
+   theme_light() + theme(axis.text.x=element_text(angle=45, hjust=1)) + guides(fill=guide_legend(title="Set"))
+ggsave(gg, filename=paste0(working.folder, "plots/RNA-BIN_RNAbiotypes_unique_condition.png"), width=14, height=4, dpi=300, family="Helvetica")
+ggsave(gg, filename=paste0(working.folder, "plots/RNA-BIN_RNAbiotypes_unique_condition.pdf"), width=14, height=4, family="Helvetica")
+
+tab.rep = tab[, list(N=sum(N)), by=c("set", "sample", "replicate", "annotation.R")]
+tab.rep = rbindlist(list(tab.rep,
+                         with(tab.rep, expand.grid(set=unique(set), sample=unique(sample), replicate=1:3,
+                                                   annotation.R=unique(annotation.R), N=NA))))
+tab.rep[, annotation.R := factor(annotation.R, levels=c("protein_coding", "long_ncRNA", "ncRNA", "other", "NAST"))]
+
+gg = ggplot(tab.rep, aes(x = annotation.R, y = N, fill = as.factor(replicate))) +
+   geom_bar(position="dodge", stat="identity", col="black") +
+   scale_y_log10("Count", breaks=10^c(0:8)) + scale_x_discrete("") +
+   scale_fill_manual(values=rev(c("#74a9cf", "#2b8cbe", "#045a8d"))) +
+   facet_grid(set~sample, scales="free_y") +
+   theme_light() + theme(axis.text.x=element_text(angle=45, hjust=1)) + guides(fill=guide_legend(title="Replicate"))
+ggsave(gg, filename=paste0(working.folder, "plots/RNA-BIN_RNAbiotypes_count_replicate.png"), width=14, height=6, dpi=300, family="Helvetica")
+ggsave(gg, filename=paste0(working.folder, "plots/RNA-BIN_RNAbiotypes_count_replicate.pdf"), width=14, height=6, family="Helvetica")
+
+
+tab.cnd = tab[, list(N=sum(N)), by=c("set", "sample", "annotation.R")]
+tab.cnd = rbindlist(list(tab.cnd,
+                         with(tab.cnd, expand.grid(set=unique(set), sample=unique(sample),
+                                                   annotation.R=unique(annotation.R), N=NA))))
+tab.cnd[, annotation.R := factor(annotation.R, levels=c("protein_coding", "long_ncRNA", "ncRNA", "other", "NAST"))]
+
+gg = ggplot(tab.cnd, aes(x = annotation.R, y = N, fill = set)) +
+   geom_bar(position="dodge", stat="identity", col="black") +
+   scale_y_log10("Count", breaks=10^c(0:8)) + scale_x_discrete("") +
+   scale_fill_tableau(palette="Classic Blue-Red 6") +
+   facet_grid(~sample, scales="free_y") +
+   theme_light() + theme(axis.text.x=element_text(angle=45, hjust=1)) + guides(fill=guide_legend(title="Set"))
+ggsave(gg, filename=paste0(working.folder, "plots/RNA-BIN_RNAbiotypes_count_condition.png"), width=14, height=4, dpi=300, family="Helvetica")
+ggsave(gg, filename=paste0(working.folder, "plots/RNA-BIN_RNAbiotypes_count_condition.pdf"), width=14, height=4, family="Helvetica")
+```
+
+```{r interactions_vs_counts, eval=FALSE}
+sig = list()
+for( grp in unique(paste(sampleTable[, Experiment], sampleTable[, Condition], sep="_")) ){
+   
+   print(grp)
+
+   files.sig = list.files(paste0(working.folder, "processed"), pattern="*_cnd_*", full.names=TRUE)
+   files.sig = files.sig[grepl(grp, files.sig)]
+   tmp = fread(paste("gunzip -c", files.sig), showProgress=FALSE)
+   sig[[grp]] = tmp[, list(.N), by=c("gene_id.R", "gene_id.D", "annotation.R")]
+   rm(tmp); gc()
+}
+
+tab = rbindlist(sig[c("GRID_mESC_GRIDseq", "RADICL_mESC_1FA", "RADICL_mOPC_1FA")], idcol="sample")
+tab = tab[, list(N = log10(.N)), by=c("sample", "gene_id.R", "annotation.R")] 
+tab = dcast.data.table(tab, gene_id.R+annotation.R~sample, value.var="N", fill=0)
+tab = tab[rowSums(tab[, 3:ncol(tab), with=FALSE]>0)>1,]
+
+tab[, annotation.R := factor(annotation.R, levels=c("protein_coding", "long_ncRNA", "ncRNA", "other", "NAST"))]
+tab = tab[order(annotation.R)]
+
+# upperfun <- function(data,mapping){
+#   ggplot(data = data, mapping = mapping)+
+#     geom_density2d()+
+#     scale_x_continuous(limits = c(0,4))+
+#     scale_y_continuous(limits = c(0,4))
+# }   
+
+lowerfun <- function(data,mapping){
+  ggplot(data = data, mapping = mapping) +
+    geom_abline(intercept = 0, slope = 1) +
+    geom_point(size=0.25) +
+    scale_x_continuous(limits = c(0,4)) +
+    scale_y_continuous(limits = c(0,4))
+}  
+
+p = ggpairs(tab, columns=3:5, mapping=ggplot2::aes(colour = annotation.R),
+            # upper = list(continuius = wrap(upperfun)),
+            lower = list(continuous = wrap(lowerfun)),
+            diag = list(continuous = wrap("densityDiag", alpha=0.5))) +
+   theme_light()
+
+for(i in 1:p$nrow) {
+   for(j in 1:p$ncol){
+      p[i,j] <- p[i,j] + 
+         scale_fill_tableau(palette = "Tableau 10") +
+         scale_colour_tableau(palette = "Tableau 10")  
+   }
+}
+
+# stat_density_2d(aes(fill=CAV,alpha=..level..), geom="polygon")
+
+save_plot(p, filename=paste0(working.folder, "plots/RNA-BIN_", bin_width, "_interactingBins_perTranscript_significant.png"), base_height=8)
+save_plot(p, filename=paste0(working.folder, "plots/RNA-BIN_", bin_width, "_interactingBins_perTranscript_significant.pdf"), base_height=8)
+
+p = ggplot(tab, aes(x=RADICL_mESC_1FA, y=GRID_mESC_GRIDseq, col=annotation.R, fill=annotation.R)) +
+   geom_abline(intercept = 0, slope = 1) +
+   stat_density_2d(aes(alpha=..level..), geom="polygon", ) +
+   scale_fill_tableau(palette = "Tableau 10") +
+   scale_colour_tableau(palette = "Tableau 10") +
+   facet_grid(~annotation.R) +
+   theme_light() + guides(alpha = FALSE, colour = FALSE, fill = FALSE)
+save_plot(p, filename=paste0(working.folder, "plots/RNA-BIN_", bin_width, "_interactingBins_perTranscript_significant_GRID-RADICL.png"), base_height=4, ncol=5, base_aspect_ratio=0.9)
+save_plot(p, filename=paste0(working.folder, "plots/RNA-BIN_", bin_width, "_interactingBins_perTranscript_significant_GRID-RADICL.pdf"), base_height=5, ncol=5, base_aspect_ratio=0.9)
+
+
+sig = rbindlist(lapply(sig,
+                       function(x)
+                          x[, list(Interactions = .N, Sum_count = sum(N), Median_count = median(N)), by=c("gene_id.R", "annotation.R")]),
+                idcol="sample")
+
+sig = melt.data.table(sig, id.vars=c("sample", "gene_id.R", "annotation.R", "Interactions"), measure.vars=c("Sum_count", "Median_count"))
+
+gg = ggplot(sig, aes(x=Interactions, y=value, col=annotation.R)) +
+   geom_point(size=0.5) +
+   scale_x_log10() + scale_y_log10() +
+   scale_colour_tableau() +
+   facet_grid(variable~sample, scales="free_y") +
+   theme_light()
+ggsave(gg, filename=paste0(working.folder, "plots/RNA-BIN_Interactions_vs_counts_significant.png"), width=14, height=4, dpi=300, family="Helvetica")
+ggsave(gg, filename=paste0(working.folder, "plots/RNA-BIN_Interactions_vs_counts_significant.pdf"), width=14, height=4, family="Helvetica")
+```
+
 ### Reproducibility
 
 ```{r createCounts, eval=FALSE}
@@ -513,7 +1813,7 @@ pdf(paste0(working.folder, "plots/RNA-BIN_plotCorrelation.pdf"), width=16, heigh
    pl = plotCorrelation2(countTable)
 dev.off()
 
-countTable = interactions[grepl("1FA", Label),]
+countTable = interactions[grepl("1FA", Label) | grepl("GRID", Label),]
    
 countTable = dcast.data.table(countTable, gene_id.R+gene_id.D~Label, value.var="Count", fill=0)
 
@@ -521,7 +1821,7 @@ countTable = as.matrix(countTable[, 3:ncol(countTable), with=FALSE])
 
 countTable = countTable[rowSums(countTable >= 1) > 1,]
 
-pdf(paste0(working.folder, "plots/RNA-BIN_plotCorrelation_1FA.pdf"), width=16, height=16)
+pdf(paste0(working.folder, "plots/RNA-BIN_plotCorrelation_RADICL-GRID.pdf"), width=16, height=16)
    pl = plotCorrelation2(countTable)
 dev.off()
 
@@ -912,15 +2212,136 @@ for( grp in unique(paste(sampleTable[, Experiment], sampleTable[, Condition], se
 }
 ```
 
-## Filtering for Erik (Enhancers)
+## Enhancers
+
+### Check on directionality
+
+```{r old, eval=FALSE}
+### Convergent Enhancers ###
+convergent = fread(paste0(working.folder, "mouse_enhancers.midpoint.mm10.bed"), col.names=c("chr", "start", "end", "name"))
+convergent = with(convergent, GRanges(chr, IRanges(start, end), "*", name))
+convergent.name = convergent$name
+convergent = list(flank(convergent, width=1e3, start=TRUE, both=FALSE),
+                  resize(convergent, width=1e3, fix="start"))
+strand(convergent[[1]]) = "+"
+strand(convergent[[2]]) = "-"
+convergent[[1]]$name = paste("EnhancerF", seq_along(convergent[[1]]), sep="_")
+convergent[[2]]$name = paste("EnhancerR", seq_along(convergent[[2]]), sep="_")
+convergent[[1]]$old_name = convergent.name
+convergent[[2]]$old_name = convergent.name
+convergent = do.call(c, convergent)
+# Remove enhancers overlapping with annotated genes (or NASTs)
+convergent = convergent[!overlapsAny(convergent, tx.regions),]
+# Remove overlapping enhancers
+convergent = convergent[-as.data.table(findOverlaps(convergent))[, .N, queryHits][N>1, queryHits],]
+### END ###
+
+enhancer.list = list(Diverging=enhancer, Converging=convergent)
+
+# Check only with "RADICL_mESC_1FA_1"
+interactions = fread(paste0("gunzip -c ", working.folder, "processed/RNA-BIN_RADICL_mESC_1FA_1_", gencode_version, "_level_1_2_3_Unique_", bin_width, ".tsv.gz"))
+interactions.gr = with(interactions, GRanges(chr.R, IRanges(start.R, end.R), strand.R, annotation.R))
+
+enhancer.count = lapply(enhancer.list,
+                        function(x){
+                              data.table(Name=x$name, Count=countOverlaps(x, interactions.gr))
+                           })
+enhancer.count = rbindlist(enhancer.count, idcol="Orientation")[, Name := ifelse(Name%like%"EnhancerF", "Forward", "Reverse")]
+
+gg1 = ggplot(enhancer.count, aes(x=log2(Count+1), fill=paste(Orientation, Name))) +
+   geom_histogram(position="dodge", bins=20, alpha=0.4, col="black") + scale_fill_brewer("", palette="Paired") + theme_minimal()
+gg2 = ggplot(enhancer.count, aes(x=log2(Count), fill=paste(Orientation, Name))) +
+   geom_histogram(position="dodge", bins=20, alpha=0.4, col="black") + scale_fill_brewer("", palette="Paired") + theme_minimal()
+
+ggl1 = ggarrange(gg1, gg2, ncol=2)
+
+# Check only with "RADICL_mESC_1FA_1" - Nascent removed
+# interactions.gr = with(interactions[!(chr.R==chr.D & abs(start.R-start.D)<2e3)], GRanges(chr.R, IRanges(start.R, end.R), strand.R, annotation.R))
+interactions.gr = with(interactions[!(chr.R==chr.D)], GRanges(chr.R, IRanges(start.R, end.R), strand.R, annotation.R))
+
+enhancer.count = lapply(enhancer.list,
+                        function(x){
+                              data.table(Name=x$name, Count=countOverlaps(x, interactions.gr))
+                           })
+enhancer.count = rbindlist(enhancer.count, idcol="Orientation")[, Name := ifelse(Name%like%"EnhancerF", "Forward", "Reverse")]
+
+gg1 = ggplot(enhancer.count, aes(x=log2(Count+1), fill=paste(Orientation, Name))) +
+   geom_histogram(position="dodge", bins=20, alpha=0.4, col="black") + scale_fill_brewer("", palette="Paired") + theme_minimal()
+gg2 = ggplot(enhancer.count, aes(x=log2(Count), fill=paste(Orientation, Name))) +
+   geom_histogram(position="dodge", bins=20, alpha=0.4, col="black") + scale_fill_brewer("", palette="Paired") + theme_minimal()
+
+ggl2 = ggarrange(gg1, gg2, ncol=2)
+```
+
+```{r new, eval=FALSE}
+### Convergent Enhancers ###
+convergent = fread(paste0(working.folder, "F5.mm10.enhancers.bed"), select=c(1,4,7), col.names=c("chr", "name", "start"))
+convergent = with(convergent, GRanges(chr, IRanges(start, width=1), "*", name))
+convergent.name = convergent$name
+convergent = list(flank(convergent, width=1e3, start=TRUE, both=FALSE),
+                  resize(convergent, width=1e3, fix="start"))
+strand(convergent[[1]]) = "+"
+strand(convergent[[2]]) = "-"
+convergent[[1]]$name = paste("EnhancerF", seq_along(convergent[[1]]), sep="_")
+convergent[[2]]$name = paste("EnhancerR", seq_along(convergent[[2]]), sep="_")
+convergent[[1]]$old_name = convergent.name
+convergent[[2]]$old_name = convergent.name
+convergent = do.call(c, convergent)
+# Remove enhancers overlapping with annotated genes (or NASTs)
+convergent = convergent[!overlapsAny(convergent, tx.regions),]
+# Remove overlapping enhancers
+convergent = convergent[-as.data.table(findOverlaps(convergent))[, .N, queryHits][N>1, queryHits],]
+### END ###
+
+enhancer.list = list(Diverging=enhancer, Converging=convergent)
+
+# Check only with "RADICL_mESC_1FA_1"
+interactions = fread(paste0("gunzip -c ", working.folder, "processed/RNA-BIN_RADICL_mESC_1FA_1_", gencode_version, "_level_1_2_3_Unique_", bin_width, ".tsv.gz"))
+interactions.gr = with(interactions, GRanges(chr.R, IRanges(start.R, end.R), strand.R, annotation.R))
+
+enhancer.count = lapply(enhancer.list,
+                        function(x){
+                              data.table(Name=x$name, Count=countOverlaps(x, interactions.gr))
+                           })
+enhancer.count = rbindlist(enhancer.count, idcol="Orientation")[, Name := ifelse(Name%like%"EnhancerF", "Forward", "Reverse")]
+
+gg1 = ggplot(enhancer.count, aes(x=log2(Count+1), fill=paste(Orientation, Name))) +
+   geom_histogram(position="dodge", bins=20, alpha=0.4, col="black") + scale_fill_brewer("", palette="Paired") + theme_minimal()
+gg2 = ggplot(enhancer.count, aes(x=log2(Count), fill=paste(Orientation, Name))) +
+   geom_histogram(position="dodge", bins=20, alpha=0.4, col="black") + scale_fill_brewer("", palette="Paired") + theme_minimal()
+
+ggl1 = ggarrange(gg1, gg2, ncol=2)
+
+# Check only with "RADICL_mESC_1FA_1" - Nascent removed
+# interactions.gr = with(interactions[!(chr.R==chr.D & abs(start.R-start.D)<2e3)], GRanges(chr.R, IRanges(start.R, end.R), strand.R, annotation.R))
+interactions.gr = with(interactions[!(chr.R==chr.D)], GRanges(chr.R, IRanges(start.R, end.R), strand.R, annotation.R))
+
+enhancer.count = lapply(enhancer.list,
+                        function(x){
+                              data.table(Name=x$name, Count=countOverlaps(x, interactions.gr))
+                           })
+enhancer.count = rbindlist(enhancer.count, idcol="Orientation")[, Name := ifelse(Name%like%"EnhancerF", "Forward", "Reverse")]
+
+gg1 = ggplot(enhancer.count, aes(x=log2(Count+1), fill=paste(Orientation, Name))) +
+   geom_histogram(position="dodge", bins=20, alpha=0.4, col="black") + scale_fill_brewer("", palette="Paired") + theme_minimal()
+gg2 = ggplot(enhancer.count, aes(x=log2(Count), fill=paste(Orientation, Name))) +
+   geom_histogram(position="dodge", bins=20, alpha=0.4, col="black") + scale_fill_brewer("", palette="Paired") + theme_minimal()
+
+ggl2 = ggarrange(gg1, gg2, ncol=2)
+```
+
+### Filtering for Erik (Enhancers)
 
 ```{r enhancer, eval=FALSE}
-if( !exists(paste0(working.folder, "ENHANCERS_OUTSIDE_GENCODE")) )
-   dir.create(paste0(working.folder, "ENHANCERS_OUTSIDE_GENCODE"))
+enhancer.folder = "Enhancers_F5"
+if( !dir.exists(paste0(working.folder, enhancer.folder)) )
+   dir.create(paste0(working.folder, enhancer.folder))
+
+fwrite(as.data.table(enhancer), file=paste0(working.folder, enhancer.folder, "/Enhancers_divergent_reference.tsv"), sep="\t", row.names=FALSE)
 
 for( lbl in unique(sampleTable[, Label]) ){
 
-   if( file.exists(paste0(working.folder, "ENHANCERS_OUTSIDE_GENCODE/", lbl, ".tsv.gz")) )
+   if( file.exists(paste0(working.folder, enhancer.folder, "/", lbl, ".tsv.gz")) )
       next
    
    interactions = fread(paste0("gunzip -c ", working.folder, "processed/RNA-BIN_", lbl, "_", gencode_version, "_level_1_2_3_Unique_", bin_width, ".tsv.gz"))
@@ -932,20 +2353,32 @@ for( lbl in unique(sampleTable[, Label]) ){
 
       # Write all interactions
    writeGzip(interactions,
-             file=paste0(working.folder, "ENHANCERS_OUTSIDE_GENCODE/", lbl, ".tsv"),
+             file=paste0(working.folder, enhancer.folder, "/", lbl, ".tsv"),
              col.names=TRUE, showProgress=TRUE, wait=TRUE, level=9)
 }
    
 for( grp in unique(paste(sampleTable[, Experiment], sampleTable[, Condition], sep="_")) ){
 
-   # Skip the iteration if the final file already exists
-   if( file.exists(paste0(working.folder, "ENHANCERS_OUTSIDE_GENCODE/RNA-BIN-enhancers_", grp, "_", gencode_version, "_level_1_2_3_Unique_", bin_width, "_significant", fdr.th, "_extended_tsc_noDistance.tsv.gz")) )
-      next
-   
    print(grp)
-
+   
    files = list.files(paste0(working.folder, "processed"), pattern=paste0(grp, ".*.gz"), full.names=TRUE)
    files = files[grepl(bin_width, files) & !grepl("GenicOnly", files) & !grepl("significant", files)]
+   
+   print(files)
+   
+   files.enhancers = list.files(paste0(working.folder, enhancer.folder), pattern="gz$", full.names=TRUE)
+   files.enhancers = files.enhancers[grepl(tstrsplit(grp, "_")[[2]], basename(files.enhancers)) & grepl(tstrsplit(grp, "_")[[3]], basename(files.enhancers)) & !grepl("significant", basename(files.enhancers))]
+   cnames = c("chr.R", "start.R", "end.R", "strand.R", "gene_id.R", "annotation.R", "gene_type.R", "region.R", "chr.D", "start.D", "end.D", "gene_id.D")
+   
+   print(files.enhancers)
+   
+   if( length(files.enhancers)==0 )
+      next
+   
+   # Skip the iteration if the final file already exists
+   if( file.exists(paste0(working.folder, enhancer.folder, "/RNA-BIN-enhancers_", grp, "_", gencode_version, "_level_1_2_3_Unique_", bin_width, "_significant_extended_tsc_noDistance.tsv.gz")) )
+      next
+   
    interactions = rbindlist(lapply(seq_along(files),
                                    function(x){
                                       tmp = fread(paste("gunzip -c", files[[as.numeric(as.character(x))]]))
@@ -954,20 +2387,13 @@ for( grp in unique(paste(sampleTable[, Experiment], sampleTable[, Condition], se
                                    }))
    setkeyv(interactions, c("chr.R", "start.R", "end.R", "strand.R", "chr.D", "start.D", "end.D", "replicate"))
    
-   files.enhancers = list.files(paste0(working.folder, "ENHANCERS_OUTSIDE_GENCODE"), pattern="gz$", full.names=TRUE)
-   files.enhancers = files.enhancers[grepl(tstrsplit(grp, "_")[[2]], files.enhancers) & grepl(tstrsplit(grp, "_")[[3]], files.enhancers)]
-   cnames = c("chr.R", "start.R", "end.R", "strand.R", "gene_id.R", "annotation.R", "gene_type.R", "region.R", "chr.D", "start.D", "end.D", "gene_id.D")
-   
-   if( length(files.enhancers)==0 )
-      next
-   
    enhancer = rbindlist(lapply(seq_along(files.enhancers),
-                              function(i){
-                                 tmp = fread(paste("gunzip -c", files.enhancers[as.numeric(as.character(i))]),
-                                             col.names=cnames)
-                                 tmp[, replicate := as.numeric(as.character(i))]
-                                 tmp
-                              }))
+                               function(i){
+                                  tmp = fread(paste("gunzip -c", files.enhancers[as.numeric(as.character(i))]),
+                                              col.names=cnames)
+                                  tmp[, replicate := as.numeric(as.character(i))]
+                                  tmp
+                               }))
    setkeyv(enhancer, key(interactions))
    interactions[enhancer, gene_id.R := i.gene_id.R]
    
@@ -1033,14 +2459,14 @@ for( grp in unique(paste(sampleTable[, Experiment], sampleTable[, Condition], se
 
    output = enhancer[subset[, list(gene_id.R, gene_id.D, Pvalue=pval, FDR=fdr.tsc)], nomatch=0]
    
-   writeGzip(output, file=paste0(working.folder, "ENHANCERS_OUTSIDE_GENCODE/RNA-BIN-enhancers_", grp, "_", gencode_version, "_level_1_2_3_Unique_", bin_width, "_significant", fdr.th, "_extended_tsc_noDistance.tsv"),
+   writeGzip(output, file=paste0(working.folder, enhancer.folder, "/RNA-BIN-enhancers_", grp, "_", gencode_version, "_level_1_2_3_Unique_", bin_width, "_significant_extended_tsc_noDistance.tsv"),
              col.names=TRUE, showProgress=TRUE, wait=FALSE, level=9)
    
    rm(output); gc()
    
    output = enhancer[subset[, list(gene_id.R, gene_id.D, Pvalue=pval, FDR=fdr.cnd)], nomatch=0]
 
-   writeGzip(output, file=paste0(working.folder, "ENHANCERS_OUTSIDE_GENCODE/RNA-BIN-enhancers_", grp, "_", gencode_version, "_level_1_2_3_Unique_", bin_width, "_significant", fdr.th, "_extended_cnd_noDistance.tsv"),
+   writeGzip(output, file=paste0(working.folder, enhancer.folder, "/RNA-BIN-enhancers_", grp, "_", gencode_version, "_level_1_2_3_Unique_", bin_width, "_significant_extended_cnd_noDistance.tsv"),
              col.names=TRUE, showProgress=TRUE, wait=FALSE, level=9)
 
    rm(enhancer, subset, output); gc()
@@ -2528,22 +3954,32 @@ dna_ids = copy(mm10)
 dna_ids = keepSeqlevels(dna_ids, paste0("chr", c(1:19, "X", "Y")), pruning.mode="coarse")
 dna_ids = data.table(as.data.frame(dna_ids), key="bin_id")
 
-gene_ids = c("ENSMUSG00000004637.15",
+gene_ids = c("ENSMUSG00000030849.18",
+             "ENSMUSG00000064899.1",
+             "ENSMUSG00000065232.1",
+             "ENSMUSG00000088088.1",
+             "ENSMUSG00000092341.2",
+             "ENSMUSG00000004637.15",
              "ENSMUSG00000069769.13",
              "ENSMUSG00000038518.15",
              "ENSMUSG00000021745.13",
              "ENSMUSG00000097039.8",
              "ENSMUSG00000085396.7",
              "ENSMUSG00000087259.7",
-             "ENSMUSG00000057215.6")
-             # "ENSMUSG00000106943.1")
+             "ENSMUSG00000057215.6",
+             "ENSMUSG00000058589.14",
+             "ENSMUSG00000032087.10",
+             "ENSMUSG00000051910.13",
+             "ENSMUSG00000106379.1",
+             "ENSMUSG00000021010.8",
+             "ENSMUSG00000106943.1")
 
 for( gene in gene_ids ){
    gene_name = genes.dt[gene_id%in%gene, gene_name]
    gene_chr = as.character(genes.dt[gene_id%in%gene, seqnames])
    
    message(gene_name)
-
+   
    breaks = seq(0, ceiling(log2(max(subset[, Count]))), 1)
    col_fun = colorRamp2(breaks, viridis(length(breaks)))
    lgd_links = Legend(at = seq(0, max(round(range(breaks))), 2),
@@ -2576,7 +4012,6 @@ for( gene in gene_ids ){
                        bed2[[as.numeric(as.character(x))]][, `:=`(value = log2(myset[[as.numeric(as.character(x))]][, Count]),
                                                                   colour = col_fun(log2(myset[[as.numeric(as.character(x))]][, Count])))])
       
-      
       cytoband = read.cytoband(species="mm10")
       cytoband_df = cytoband$df
       chromosome = cytoband$chromosome
@@ -2590,9 +4025,13 @@ for( gene in gene_ids ){
                        xrange[zoomed_chr_index] / sum(xrange[zoomed_chr_index]))
       
       extend_chromosomes = function(bed, chromosome, prefix = "zoom_") {
-         zoom_bed = bed[bed[[1]] %in% chromosome, , drop = FALSE]
-         zoom_bed[[1]] = paste0(prefix, zoom_bed[[1]])
-         rbind(bed, zoom_bed)
+         if( chromosome %in% as.data.frame(bed)[, 1] ){
+            zoom_bed = bed[bed[[1]] %in% chromosome, , drop = FALSE]
+            zoom_bed[[1]] = paste0(prefix, zoom_bed[[1]])
+            return(rbind(bed, zoom_bed))
+         }else{
+            return(bed)
+         }
       }   
       
       # pdf(paste0("plots/circos_BIN_", gene_name, "_significant_Links.pdf"), width=18, height=10)
@@ -2613,7 +4052,7 @@ for( gene in gene_ids ){
       #                       just = c("left", "bottom")))
       # grid.draw(lgd_list_vertical)
       # dev.off()
-   
+      
       pdf(paste0(working.folder, "plots/circos_BIN_", gene_name, "_significant_Lines.pdf"), width=18, height=10)
       vec = if( length(bed1)%%2==0 ){ c(1:length(bed1)) }else{ c(1:length(bed1), 0) }
       layout(matrix(vec, 2, length(vec)/2))
@@ -2621,16 +4060,18 @@ for( gene in gene_ids ){
          circos.clear()
          circos.par(start.degree = 90)
          circos.initializeWithIdeogram(extend_chromosomes(cytoband_df, gene_chr), sector.width = sector.width)
-         circos.genomicTrack(extend_chromosomes(bed2[[i]][, list(seqnames, start, end, value)], gene_chr),
-                             panel.fun = function(region, value, ...) {
-                                circos.genomicLines(region, value, type = "h")
-                             })         
-         circos.link(gene_chr, get.cell.meta.data("cell.xlim", sector.index = gene_chr),
-                     paste0("zoom_", gene_chr), get.cell.meta.data("cell.xlim", sector.index = paste0("zoom_", gene_chr)),
-                     col = "#00000020", border = NA)
-         bed2[[i]][seqnames%in%gene_chr, seqnames := paste0("zoom_", seqnames)]
-         circos.genomicLink(bed1[[i]], bed2[[i]], col=bed2[[i]]$colour)
-         # circos.genomicLabels(extend_chromosomes(bed1[[i]][1,], gene_chr), side = "inside", labels=gene_name, connection_height = convert_height(3, "mm"))
+         if( diff(range(bed2[[i]][, value]))!=0 ){
+            circos.genomicTrack(extend_chromosomes(bed2[[i]][, list(seqnames, start, end, value)], gene_chr),
+                                panel.fun = function(region, value, ...) {
+                                   circos.genomicLines(region, value, type = "h")
+                                })         
+            circos.link(gene_chr, get.cell.meta.data("cell.xlim", sector.index = gene_chr),
+                        paste0("zoom_", gene_chr), get.cell.meta.data("cell.xlim", sector.index = paste0("zoom_", gene_chr)),
+                        col = "#00000020", border = NA)
+            bed2[[i]][seqnames%in%gene_chr, seqnames := paste0("zoom_", seqnames)]
+            circos.genomicLink(bed1[[i]], bed2[[i]], col=bed2[[i]]$colour)
+            # circos.genomicLabels(extend_chromosomes(bed1[[i]][1,], gene_chr), side = "inside", labels=gene_name, connection_height = convert_height(3, "mm"))
+         }
          text(0, 1.2, names(bed1)[i], cex=2, font=2)
          title(names(bed1)[i])
          circos.clear()
@@ -2641,7 +4082,7 @@ for( gene in gene_ids ){
                             just = c("left", "bottom")))
       grid.draw(lgd_list_vertical)
       dev.off()
-   
+      
    }
 }
 ```
