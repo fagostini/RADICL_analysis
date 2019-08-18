@@ -1,0 +1,443 @@
+---
+title: "RADICL-seq Notebook"
+author: "Federico Agostini <federico.agostini@crick.ac.uk>"
+date: "19 July 2017"
+output:
+  pdf_document: default
+  html_notebook:
+    code_folding: hide
+    fig_align: center
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+require("knitr")
+knitr::opts_chunk$set(dev='CairoPNG', dpi=300, fig_height=480, fig_width=800, tidy.opts=list(width.cutoff=80), tidy=TRUE)
+```
+
+## Session information: {-}
+
+```{r setwd, echo=FALSE, warning=FALSE}
+working.folder = "./"
+
+while( !dir.exists(working.folder) )
+   working.folder = readline(prompt="Working folder not found! Please enter a valid path: ")
+if( substr(working.folder, nchar(working.folder), nchar(working.folder)) != "/")
+   working.folder = paste0(working.folder, "/")
+
+# setwd(working.folder)
+
+# knitr::opts_chunk$set(root.dir=working.folder)
+
+cat(sessionInfo()$R.version$version.string, fill=TRUE)
+cat(paste("Platform", sessionInfo()$platform), fill=TRUE)
+cat(paste("Running under", sessionInfo()$running), fill=TRUE)
+cat(paste("Last knitted on", date()), fill=TRUE)
+cat(paste("Working directory set to", working.folder), fill=TRUE)
+
+```
+
+```{r setParams}
+reads.quality.min = 37 # Reads with RNA and DNA mapQ >= to this number will be retained
+reads.length.min = 30  # Reads with RNA and DNA length >= to this number will be retained
+```
+
+```{r packages, message=FALSE, results="hide"}
+require("BSgenome.Mmusculus.UCSC.mm10")
+require("GenomicFeatures")
+require("data.table")
+require("ggpubr")
+require("RColorBrewer")
+require("gridExtra")
+require("DT")
+require("Cairo")
+require("png")
+require("ggthemes")
+require("cowplot")
+require("scales")
+require("ggsci")
+require("viridis")
+require("ggforce")
+require("GGally")
+require("ggrepel")
+```
+
+## Load the packages: {-}
+
+  * BSgenome.Mmusculus.UCSC.mm10
+  * GenomicFeatures
+  * data.table
+  * ggpubr
+  * RColorBrewer
+  * gridExtra
+  * DT
+  * Cairo
+  * png
+  * ggthemes
+  * cowplot
+  * scales
+  * ggsci
+  * viridis
+  * ggforce
+  * GGally
+  * ggrepel
+
+Custom function: _read.paired.bed()_
+
+The function reads a non-standard BED file and convert it into a GRangesList object containing the RNA (first element in the list) and DNA (second element in the list) information. It also stores additional columns, though these will be removed as they are not useful for the analysis.
+
+```{r readPairedBed, echo=TRUE}
+read.paired.bed <- function(file, min.mapq=reads.quality.min, min.length=reads.length.min){
+   column.names = paste(c("chr", "start", "stop", "score", "strand"), rep(c("R", "D"), each=5), sep=".")
+   column.types = rep(c("character", "numeric", "numeric", "character", "numeric", "character"), 2)
+   if( grepl("*.gz", file) ){
+      bed = fread(cmd=paste("gunzip -c", file), select=c(1:3, 5:9, 11:12),
+                  col.names=column.names,
+                  colClasses=c(column.types, rep("character", 3)), showProgress=FALSE)
+   }else{
+      bed = fread(file, select=c(1:3, 5:9, 11:12),
+                  col.names=column.names,
+                  colClasses=c(column.types, rep("character", 3)), showProgress=FALSE)
+   }
+   
+   bed = bed[score.R>=min.mapq & score.D>=min.mapq]
+   bed = bed[(stop.R-start.R+1)<min.length & (stop.D-start.D+1)<min.length]
+   
+   bed = GRangesList(resize(with(bed,
+                          GRanges(chr.R, IRanges(start.R, stop.R), strand.R, score=score.R,
+                                  index=1:nrow(bed))), width=1, fix="center"),
+                     resize(with(bed,
+                          GRanges(chr.D, IRanges(start.D, stop.D), strand.D, score=score.D,
+                                  index=1:nrow(bed))), width=1, fix="center"))
+   
+   return(bed)
+}
+```
+
+# Reference annotation
+
+Gencode genes are not selected for any level of annotation, which means that 1, 2 and 3 reliability levels are included.
+
+```{r loadNewAnnotation}
+if(!exists("gencode_version"))
+   gencode_version = "m14"
+
+load(paste0("GencodeReference/mm10_Gencode", toupper(gencode_version), "_annotations.RData"))
+
+genes = sort.GenomicRanges(with(gene.metadata,
+                                GRanges(seqnames, IRanges(start, end), strand, gene_id, gene_type, gene_name)),
+                           ignore.strand=TRUE)
+genes.dt = data.table(as.data.frame(genes), index=seq_along(genes), key="index")
+
+tx.regions = readRDS(paste0("GencodeReference/mm10_Gencode", toupper(gencode_version), "_annotations.all.genes.regions.rds"))
+tx.regions.dt = data.table(as.data.frame(tx.regions), index=1:length(tx.regions), key="index")
+
+blacklist = fread(cmd=paste("gunzip -c", file.path(working.folder, "mm10.blacklist.bed.gz")), col.names=c("chr", "start", "end"))
+blacklist.gr = with(blacklist, GRanges(chr, IRanges(start, end)))
+```
+
+## Non-annotated stem cell specific transcripts (NASTs) 
+
+__REF:__ [Fort A. _et al._, Deep transcriptome profiling of mammalian stem cells supports a regulatory role for retrotransposons in pluripotency maintenance, _Nature Genetics_, 2014.](http://www.nature.com/ng/journal/v46/n6/abs/ng.2965.html)
+
+```{r nastRNAs}
+nast.dt = fread("Carninci_Mm3_CAGE_NAST_lifted.bed", header=FALSE,
+                sel=c(1:3,6,4,7), col.names=c("chr", "start", "end", "strand", "name", "compartment"))
+nast.gr = with(nast.dt, GRanges(chr, IRanges(start, end), strand, name, compartment))
+
+# NASTs are resized to a length of 1000 nt
+nast.gr = resize(nast.gr, width=width(nast.gr)+1e3, fix="start")
+
+# NASTs overlapping Gencode annotated features are discarded
+nast.gr = sort.GenomicRanges(nast.gr[!overlapsAny(nast.gr, tx.regions)], ignore.strand=TRUE)
+mcols(nast.gr) = data.frame(gene_id=paste("NAST", seq_along(nast.gr), sep="_"),
+                            gene_type="NAST", gene_name=nast.gr$name, annotation="NAST", type="exon")
+
+# NASTs are added to the gene list
+genes = sort.GenomicRanges(c(genes, nast.gr[, 1:3]), ignore.strand=TRUE)
+genes.dt = data.table(as.data.frame(genes), index=seq_along(genes), key="index")
+
+# NASTs are added to the genic regions
+tx.regions = sort.GenomicRanges(c(tx.regions, nast.gr), ignore.strand=TRUE)
+tx.regions.dt = data.table(as.data.frame(tx.regions), index=1:length(tx.regions), key="index")
+```
+
+```{bash, eval=FALSE, echo=FALSE}
+# 1 Mb bins
+bedtools makewindows -g GRCm38.primary_assembly.genome.fa.fai -w 100000 -i winnum > GRCm38.genome.100KB.bed
+# 25 Kb bins
+bedtools makewindows -g GRCm38.primary_assembly.genome.fa.fai -w 25000 -i winnum > GRCm38.genome.25KB.bed
+# 10 Kb bins
+bedtools makewindows -g GRCm38.primary_assembly.genome.fa.fai -w 10000 -i winnum > GRCm38.genome.10KB.bed
+```
+
+```{r readChromosomes}
+bin_width = "25KB"
+
+mm10 = fread(paste0("GRCm38.genome.", bin_width, ".bed"), col.names=c("seqnames", "start", "end", "genomic_bin"))
+
+mm10 = with(mm10, GRanges(seqnames, IRanges(start, end), strand="*", genomic_bin))
+mm10 = resize(mm10, width=width(mm10)-1, fix="start")
+
+mm10.dt = data.table(as.data.frame(mm10))
+mm10.dt[, `:=`(bin_id = paste(seqnames, genomic_bin, sep="_"), index=seq_along(genomic_bin))]
+
+mm10$bin_id = mm10.dt[, bin_id]
+
+setkey(mm10.dt, index)
+```
+
+```{r readTable}
+sampleTable = fread("sampleTable.tsv",
+                    header=FALSE, col.names=c("Experiment", "Name", "Group", "Barcode", "Technical", "Path"))
+sampleTable[, Path := paste0(working.folder, Path)] 
+
+if( !all(file.exists(sampleTable[, Path])) )
+   stop("One or more files cannot be found! Please check the paths in the sampleTable.tsv file.")
+
+sampleTable[, c("Condition", "Replicate") := tstrsplit(Group, "\\.")][, Replicate := as.numeric(Replicate)]
+
+sampleTable[, Label := paste(Experiment, Condition, Replicate, sep="_")]
+setkey(sampleTable, Label)
+```
+
+### Read files
+
+The _read.paired.bed()_ function is employed to parse the files containing the paired RNA-DNA reads. For each BED file, the corresponding gene names are assigned to the RNA and DNA fragments (these are already present in the input BED files but they correspond to a very old Gencode genes annotation). Pairs for which it is not possible to assign either of the framents to a unique position on the genome (i.e., BWA mapQ score < 37). Cases where the RNA fragment could not be assigned to an annotated features were marked _intergenic_, while fragments mapping to more than one gene, which could lead to double counting or misassignment, were marked _multigenic_. Note, the latter case should not occur considering that the annotation was designed to avoid such issue.
+
+_WARNING: This chunk is labour-intensive. If the outputs have already been generated, make sure they are in the correct folder and have the correct name to avoid regenerating them all._
+
+```{r readInteractions}
+if( !dir.exists(paste0(working.folder, "processed")) )
+   dir.create(paste0(working.folder, "processed"), recursive=TRUE)
+
+# Iterate through the groups
+for( lbl in unique(sampleTable[, Label]) ){
+   
+   # Skip the iteration if the final file already exists
+   if( file.exists(paste0(working.folder, "processed/RNA-BIN_", lbl, "_", gencode_version, "_level_1_2_3_Unique_", bin_width, ".tsv.gz")) )
+      next
+   
+   # Create an empty list
+   interactions = list()
+   
+   # Iterate through the individual files for the group
+   for( pth in sampleTable[Label%in%lbl, Path] ){
+      
+      bed = read.paired.bed(pth, min.mapq=reads.quality.min, min.length=reads.length.min)
+      
+      # RNA
+      overlaps.rna = as.data.table(findOverlaps(bed[[1]], tx.regions, ignore.strand=FALSE))
+      setkey(overlaps.rna, subjectHits)
+      overlaps.rna = overlaps.rna[tx.regions.dt[, list(index, gene_id.R=gene_id, annotation.R=annotation, gene_type.R=gene_type, region.R=type)], nomatch=0][, subjectHits := NULL]
+      setkey(overlaps.rna, queryHits)
+      # Multigenic
+      overlaps.rna[queryHits%in%overlaps.rna[, .N, by="queryHits"][N>1, queryHits], `:=`(gene_id.R="Multigenic", annotation.R="Multigenic", gene_type.R="Multigenic", region.R="Multigenic")]
+      overlaps.rna = unique(overlaps.rna)
+      # Intergenic
+      missing.rna = data.table(queryHits=setdiff(1:length(bed[[1]]), overlaps.rna[, queryHits]))
+      sel = overlapsAny(bed[[1]][missing.rna[, queryHits],], tx.regions)
+      missing.rna[sel,  `:=`(gene_id.R="Genic_unassigned", annotation.R="Genic_unassigned", gene_type.R="Genic_unassigned", region.R="Genic_unassigned")]
+      missing.rna[!sel, `:=`(gene_id.R="Intergenic", annotation.R="Intergenic", gene_type.R="Intergenic", region.R="Intergenic")]
+      
+      overlaps.rna = rbindlist(list(overlaps.rna, missing.rna))
+      setkey(overlaps.rna, queryHits)
+      
+      # DNA
+      overlaps.dna = data.table(as.data.frame(findOverlaps(bed[[2]], mm10, ignore.strand=TRUE)), key="subjectHits")
+      overlaps.dna = overlaps.dna[mm10.dt[, list(index, gene_id.D=bin_id)], nomatch=0][, subjectHits := NULL]
+      setkey(overlaps.dna, queryHits)
+      # Multigenic
+      overlaps.dna[queryHits%in%overlaps.dna[, .N, by="queryHits"][N>1, queryHits], gene_id.D := "Multigenic"]
+      overlaps.dna = unique(overlaps.dna)
+      # Intergenic
+      missing.dna = data.table(queryHits=setdiff(1:length(bed[[2]]), overlaps.dna[, queryHits]))
+      sel = overlapsAny(bed[[2]][missing.dna[, queryHits],], mm10)
+      missing.dna[, gene_id.D := ifelse(sel, "Bin_unassigned", "Intergenic")]
+      
+      bed = lapply(bed, function(x) data.table(as.data.frame(x), key="index"))
+      
+      overlaps.rna = overlaps.rna[bed[[1]][, list(index, chr.R=seqnames, start.R=start, end.R=end, strand.R=strand)], nomatch=0]
+      setcolorder(overlaps.rna, c(1, 6:9,  2:5))
+      overlaps.dna = overlaps.dna[bed[[2]][, list(index, chr.D=seqnames, start.D=start, end.D=end)], nomatch=0]
+      setcolorder(overlaps.dna, c(1, 3:5,  2))
+      
+      rm(bed); gc()
+      
+      overlaps = overlaps.rna[overlaps.dna, nomatch=0][, queryHits := NULL]
+      overlaps[, region.R := droplevels(region.R)]
+      
+      rm(overlaps.rna, overlaps.dna); gc()
+      
+      interactions = append(interactions, list(overlaps))
+      
+      rm(overlaps)
+      gc()
+      
+   }
+   
+   # Merge all the interactions of the group
+   interactions = rbindlist(interactions)
+   
+   # Write all interactions
+   writeGzip(interactions,
+             file=paste0(working.folder, "processed/RNA-BIN_", lbl, "_", gencode_version, "_level_1_2_3_Unique_", bin_width, ".tsv"),
+             col.names=TRUE, showProgress=TRUE, wait=TRUE, level=9)
+   
+   # Write genic (remove multi- and inter-genic RNAs) interactions
+   writeGzip(interactions[!(gene_id.R%in%c("Multigenic", "Intergenic") | gene_id.D%in%c("Multigenic", "Intergenic"))],
+             file=paste0(working.folder, "processed/RNA-BIN_", lbl, "_", gencode_version, "_level_1_2_3_Unique_", bin_width, "_GenicOnly.tsv"),
+             col.names=TRUE, showProgress=TRUE, wait=TRUE, level=9)
+}
+```
+
+_WARNING: This chunk is labour-intensive. If the outputs have already been generated, make sure they are in the correct folder and have the correct name to avoid regenerating them all._
+
+```{r significance}
+if(!exists("fdr.th")) fdr.th = 0.05
+
+if( !dir.exists(paste0(working.folder, "RData")) )
+   dir.create(paste0(working.folder, "RData"), recursive=TRUE)
+
+for( grp in unique(paste(sampleTable[, Experiment], sampleTable[, Condition], sep="_")) ){
+   
+   # Skip the iteration if the final file already exists
+   if( file.exists(paste0(working.folder, "processed/RNA-BIN_", grp, "_", gencode_version, "_level_1_2_3_Unique_", bin_width, "_significant", fdr.th, "_extended_tsc_noDistance.tsv.gz")) )
+      next
+   
+   print(grp)
+   
+   files = list.files(paste0(working.folder, "processed"), pattern=paste0(grp, ".*.gz"), full.names=TRUE)
+   files = files[grepl(bin_width, files) & !grepl("GenicOnly", files) & !grepl("significant", files)]
+   interactions = rbindlist(lapply(seq_along(files),
+                                   function(x){
+                                      tmp = fread(paste("gunzip -c", files[[as.numeric(as.character(x))]]))
+                                      tmp[, replicate := as.numeric(as.character(x))]
+                                      tmp
+                                   }))
+   
+   # Calculate the count per interaction pair
+   setkeyv(interactions, c("gene_id.R", "gene_id.D"))
+   subset = interactions[, .N, by=key(interactions)]
+   setnames(subset, "N", "Count")
+   
+   # subset = subset[!(gene_id.R%in%c("Multigenic", "Intergenic") | gene_id.D%in%c("Multigenic", "Intergenic"))]
+   
+   # # Add the correction for the distance (ignore the multi- and inter-genic, they will be removed downstream anyway)
+   # pairs.unique = unique(subset[!(gene_id.R%in%c("Multigenic", "Intergenic") | gene_id.D%in%c("Multigenic", "Intergenic")), list(gene_id.R, gene_id.D)])
+   # # pairs.unique = unique(subset[, list(gene_id.R, gene_id.D)])
+   # pairs.unique[, distance := distance(genes[match(pairs.unique[, gene_id.R], genes$gene_id)],
+   #                                     mm10[match(pairs.unique[, gene_id.D], mm10$bin_id)],
+   #                                     ignore.strand=TRUE)]
+   # # Calculate the distance distribution and the weight factors
+   # h = hist(pairs.unique[distance>0 & distance<=1e6, distance], 100, plot=FALSE)
+   # h = data.table(breaks=h$breaks[-1], count=log10(h$counts))
+   # h[, index := seq_along(breaks)][, scaled := (count-min(count))/(2*(max(count)-min(count)))+0.5]
+   # setkey(h, index)
+   # 
+   # # Set a large number (it will not be used) for the interactions with no distance info
+   # pairs.unique[is.na(distance), distance := 7e6]
+   # # Assign the weight factors
+   # pairs.unique[, interval := findInterval(distance, c(0, h$breaks))]
+   # setkey(pairs.unique, interval)
+   # # Interactions farther than 1e6 bp (or interchromosomal) will have the lowest weight
+   # pairs.unique[, distance := as.double(distance)][distance>1e6, distance := min(h[,scaled])]
+   # pairs.unique = merge(pairs.unique, h, by.x="interval", by.y="index", all.x=TRUE)
+   # pairs.unique[!is.na(scaled), distance := scaled]
+   # setkeyv(pairs.unique, c("gene_id.R", "gene_id.D"))
+   
+   frandom=1
+   
+   # Calculate the frequency per RNA
+   setkeyv(subset, "gene_id.R")
+   rj = subset[, list(coverage=sum(Count)), by=key(subset)]
+   rj[, relative := coverage/sum(coverage)]
+   setkeyv(rj, "gene_id.R")
+   subset[rj, rj := relative]
+   
+   # Calculate the frequency per DNA (or BIN)
+   setkeyv(subset, "gene_id.D")
+   rh = subset[, list(coverage=sum(Count)), by=key(subset)]
+   rh[, relative := coverage/sum(coverage)]
+   setkeyv(rh, "gene_id.D")
+   subset[rh, rh := relative]
+   
+   # Calculate the total number of interactions (needed for the binomial test)
+   subset[, N := sum(Count)]
+   
+   # Remove the Multi- and Inter-genic
+   subset = subset[!(gene_id.R%in%c("Multigenic", "Intergenic") | gene_id.D%in%c("Multigenic", "Intergenic"))]
+   
+   # # Assign the distance weight to each interaction pair
+   # setkeyv(subset, c("gene_id.R", "gene_id.D"))
+   # subset[pairs.unique, Distance := distance]
+   
+   # # Free some memory
+   # rm(pairs.unique)
+   # gc()
+   
+   # Calculate the conditional (and weighted) probability
+   # subset[, `:=`(pjh = rj*rh*frandom*Distance)][, `:=`(Distance = NULL, rj = NULL, rh = NULL)]
+   # subset[, `:=`(pjh = rj*rh*frandom)][, `:=`(rj = NULL, rh = NULL)]
+   # subset[, `:=`(pjh = rj*(.N/sum(Count)), N = sum(Count)), by="gene_id.R"]
+   subset[, `:=`(pjh = 1*(1/.N), N = sum(Count)), by="gene_id.R"]
+
+   # Perform the binomial test
+   setkeyv(subset, c("gene_id.R", "gene_id.D"))
+   subset[, `:=`(pval=binom.test(Count, N, p=pjh, alternative="greater")$p.value), by=key(subset)]
+   
+   # Perform the correction (Benjamini-Hochberg and Benjamini-Yekutieli) per transcript
+   # Calculate the total number of interacting bins (whether with genic or intergenic regions)
+   # unique.bins = length(mm10)
+   unique.bins = length(subset[, unique(gene_id.D)])
+   
+   setkeyv(subset, "gene_id.R")
+   subset[, fdr.tsc := p.adjust(pval, method="BH"), by=key(subset)]
+   # # Perform the correction (Benjamini-Hochberg and Benjamini-Yekutieli) per condition
+   # # Calculate the total number of interacting bins (whether with genic or intergenic regions)
+   # total.inter = as.numeric(length(subset[, unique(gene_id.R)]))*as.numeric(length(subset[, unique(gene_id.D)]))
+   # subset[, fdr.cnd := p.adjust(pval, method="BH", n=total.inter)]
+   subset[, fdr.cnd := p.adjust(pval, method="BH")]
+
+   # Calculate the observed vs expected ratio
+   subset[, `:=`(Rjh = log2(Count/(pjh*N)))]
+   
+   # Remove some columns
+   subset[, `:=`(pjh = NULL, N = NULL)]
+   
+   # save the entire object
+   saveRDS(subset,
+           file=paste0(working.folder, "RData/RNA-BIN_", grp, "_", gencode_version, "_level_1_2_3_Unique_", bin_width, "_significant_noDistance.rds"))
+   
+   setkeyv(subset, c("gene_id.R", "gene_id.D"))
+   setkeyv(interactions, key(subset))
+
+   # print(nrow(subset[fdr.tsc<fdr.th & Count==1,]), nrow(subset[fdr.cnd<fdr.th & Count==1,]))
+   
+   output = interactions[subset[fdr.tsc<fdr.th, list(Condition=grp, gene_id.R, gene_id.D, Pvalue=pval, FDR=fdr.tsc)], nomatch=0]
+   
+   writeGzip(output, file=paste0(working.folder, "processed/RNA-BIN_", grp, "_", gencode_version, "_level_1_2_3_Unique_", bin_width, "_significant", fdr.th, "_extended_tsc_noDistance.tsv"),
+             col.names=TRUE, showProgress=TRUE, wait=FALSE, level=9)
+   
+   rm(output); gc()
+   
+   output = interactions[subset[fdr.cnd<fdr.th, list(Condition=grp, gene_id.R, gene_id.D, Pvalue=pval, FDR=fdr.cnd)], nomatch=0]
+
+   # print(nrow(subset[fdr.tsc<fdr.th & Count==1,]))
+
+   writeGzip(output, file=paste0(working.folder, "processed/RNA-BIN_", grp, "_", gencode_version, "_level_1_2_3_Unique_", bin_width, "_significant", fdr.th, "_extended_cnd_noDistance.tsv"),
+             col.names=TRUE, showProgress=TRUE, wait=FALSE, level=9)
+
+   rm(interactions, subset, output); gc()
+   
+}
+# # As required by Michiael
+# setnames(subset, "fdr.tsc", "FDR")
+# setnames(subset, "pval", "Pvalue")
+# subset[, `:=`(fdr.cnd=NULL, Rjh=NULL)]
+# for( cond in unique(subset[, Condition]) )
+#    writeGzip(subset[Condition%in%cond],
+#              file=paste0("RNA-BIN_counts_", gencode_version, "_level_1_2_3_AllOverlapsUnique_", bin_width, "_significant_", cond, "_noDistance.tsv"),
+#              col.names=TRUE, showProgress=TRUE, wait=TRUE, level=9)
+```
