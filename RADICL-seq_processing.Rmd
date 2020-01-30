@@ -83,6 +83,18 @@ require("ggrepel")
   * GGally
   * ggrepel
 
+Custom function: _writeGzip()_
+
+The function saves the object to file and makes a system call to compress the output using _gzip_.
+
+```{r writeGzip, echo=FALSE}
+writeGzip <- function(x, file = "", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE, showProgress = FALSE, wait = TRUE, level = 6) {
+   fwrite(x, file = file, quote = quote, sep = sep, row.names = row.names, col.names = col.names, showProgress = showProgress)
+   catch = system(paste0("gzip -", level, " ", file), wait = wait)
+   return(catch)
+}
+```
+
 Custom function: _read.paired.bed()_
 
 The function reads a non-standard BED file and convert it into a GRangesList object containing the RNA (first element in the list) and DNA (second element in the list) information. It also stores additional columns, though these will be removed as they are not useful for the analysis.
